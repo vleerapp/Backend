@@ -1,95 +1,74 @@
-process.env.YTDL_NO_UPDATE = '1';
-
 import express from 'express';
 import ytdl from '@distube/ytdl-core';
 import fs from 'fs';
 import path from 'path';
-import ffmpeg from 'fluent-ffmpeg';
+import { Readable } from 'stream';
+import { Writer } from 'wav';
 
 const app = express();
 const port = 3000;
-const cacheDir = path.resolve('cache');
-
-// Ensure cache directory exists
-if (!fs.existsSync(cacheDir)) {
-  fs.mkdirSync(cacheDir, { recursive: true });
-}
 
 app.use(express.json());
 
 app.get('/stream', async (req, res) => {
+  console.log('Received request for /stream');
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
+    console.log('Invalid or missing id parameter');
     return res.status(400).json({ error: 'Invalid or missing id parameter' });
   }
 
   const videoUrl = `https://www.youtube.com/watch?v=${id}`;
-  const cacheFilePath = path.resolve(cacheDir, `${id}.wav`);
+  const cacheDir = path.join('cache');
+  const cacheFilePath = path.join(cacheDir, `${id}.wav`);
 
   try {
     if (fs.existsSync(cacheFilePath)) {
-      console.log(`Cached file found for ${id}, sending file`);
+      console.log(`Serving cached file: ${cacheFilePath}`);
       return res.sendFile(cacheFilePath);
     }
 
-    console.log(`Fetching video info for ${videoUrl}`);
-    const info = await ytdl.getInfo(videoUrl);
-    console.log(`Video info fetched successfully for ${id}`);
+    console.log(`Fetching video: ${videoUrl}`);
+    const videoStream = ytdl(videoUrl, { quality: 'highestaudio' });
+    const byteArray: number[] = [];
 
-    console.log(`Starting download and conversion for ${id}`);
-    
-    const audioStream = ytdl(videoUrl, { 
-      quality: 'highestaudio',
-      filter: 'audioonly'
-    });
-
-    let dataReceived = false;
-
-    audioStream.on('data', (chunk) => {
-      if (!dataReceived) {
-        console.log(`Received first chunk of data for ${id}`);
-        dataReceived = true;
+    videoStream.on('data', (chunk) => {
+      for (let i = 0; i < chunk.length; i++) {
+        byteArray.push(chunk[i]);
+        console.log(byteArray);
       }
     });
 
-    audioStream.on('end', () => {
-      console.log(`YouTube stream ended for ${id}`);
+    videoStream.on('end', () => {
+      console.log('Video stream ended, processing audio');
+      const audioBuffer = Buffer.from(byteArray);
+      const audioStream = new Readable();
+      audioStream.push(audioBuffer);
+      audioStream.push(null);
+
+      const writer = new Writer({
+        channels: 2,
+        sampleRate: 44100,
+        bitDepth: 16
+      });
+
+      const outputStream = fs.createWriteStream(cacheFilePath);
+      writer.pipe(outputStream);
+
+      audioStream.pipe(writer);
+
+      outputStream.on('finish', () => {
+        console.log(`Audio processed and saved to ${cacheFilePath}`);
+        res.sendFile(cacheFilePath);
+      });
     });
 
-    ffmpeg(audioStream)
-      .audioCodec('pcm_s16le')
-      .audioFrequency(44100)
-      .format('wav')
-      .on('start', (commandLine) => {
-        console.log('FFmpeg started with command:', commandLine);
-      })
-      .on('progress', (progress) => {
-        console.log(`Processing ${id}: ${progress.percent ? progress.percent.toFixed(2) : 'N/A'}% done`);
-      })
-      .on('error', (err) => {
-        console.error(`FFmpeg error for ${id}:`, err);
-        res.status(500).send('An error occurred during audio conversion.');
-      })
-      .on('end', () => {
-        console.log(`Conversion complete for ${id}`);
-        if (fs.existsSync(cacheFilePath)) {
-          res.sendFile(cacheFilePath, (err) => {
-            if (err) {
-              console.error('Error sending file:', err);
-              res.status(500).send('An error occurred while sending the file.');
-            } else {
-              console.log(`File sent successfully for ${id}`);
-            }
-          });
-        } else {
-          console.error(`File not found after conversion: ${cacheFilePath}`);
-          res.status(500).send('An error occurred while saving the converted file.');
-        }
-      })
-      .save(cacheFilePath);
-
+    videoStream.on('error', (err) => {
+      console.error('Error occurred while streaming video:', err);
+      res.status(500).send('An error occurred while streaming the audio.');
+    });
   } catch (err) {
-    console.error(`Error occurred for ${id}:`, err);
+    console.error('Error occurred:', err);
     res.status(500).send('An error occurred while streaming the audio.');
   }
 });
