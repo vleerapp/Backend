@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build and Push Docker Images
 
 on:
   workflow_dispatch:
@@ -7,10 +7,15 @@ env:
   DOCKERHUB_USERNAME: vleerapp
   DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
   DOCKERHUB_REPOSITORY: vleerapp/backend
+  GITHUB_REGISTRY: ghcr.io
+  GITHUB_IMAGE_NAME: ${{ github.repository_owner }}/backend
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -24,9 +29,18 @@ jobs:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GITHUB_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push to DockerHub and GitHub Packages
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ env.DOCKERHUB_REPOSITORY }}:latest
+          tags: |
+            ${{ env.DOCKERHUB_REPOSITORY }}:latest
+            ${{ env.GITHUB_REGISTRY }}/${{ env.GITHUB_IMAGE_NAME }}:latest
