@@ -8,6 +8,10 @@ const port = 3000;
 
 app.use(express.json());
 
+app.get('/', (req, res) => {
+  res.send('👋');
+});
+
 app.get('/stream', async (req, res) => {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
