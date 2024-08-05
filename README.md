@@ -1,6 +1,16 @@
-# vleer-backend
+# Backend
 
-To install dependencies:
+To run this instance yourself you can choose between hub.docker.com or github packages
+```zsh
+docker run -d -p 3000:3000 ghcr.io/vleerapp/backend:latest
+```
+```zsh
+docker run -d -p 3000:3000 vleerapp/backend:latest
+```
+
+
+
+### To install dependencies:
 
 ```bash
 bun install
