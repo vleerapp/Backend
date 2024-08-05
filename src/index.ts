@@ -2,7 +2,9 @@ import express from 'express';
 import YTDlpWrap from 'yt-dlp-wrap';
 import fs from 'fs';
 import path from 'path';
+import { Readable, Transform } from 'stream';
 
+const ytDlp = new YTDlpWrap();
 const app = express();
 const port = 3000;
 
@@ -72,6 +74,82 @@ app.get('/download', async (req, res) => {
     });
 
     res.sendFile(cacheFilePath);
+  } catch (error) {
+    console.error(`[${new Date().toLocaleString()}] 💥 Error: ${error instanceof Error ? error.message : String(error)}`);
+    res.status(500).send('An error occurred while streaming the audio.');
+  }
+});
+
+app.get('/stream', async (req, res) => {
+  const { id, quality } = req.query;
+  if (!id || typeof id !== 'string' || !quality || (quality !== 'compressed' && quality !== 'lossless')) {
+    console.error(`[${new Date().toLocaleString()}] 🚫 Invalid request: ${JSON.stringify({ id, quality })}`);
+    return res.status(400).json({ error: 'Invalid or missing id or quality parameter' });
+  }
+
+  const videoUrl = `https://www.youtube.com/watch?v=${id}`;
+  const cacheDir = path.resolve(process.cwd(), 'cache');
+  const compressedDir = path.join(cacheDir, 'compressed');
+  const losslessDir = path.join(cacheDir, 'lossless');
+  const cacheFilePath = quality === 'compressed'
+    ? path.join(compressedDir, `${id}.mp3`)
+    : path.join(losslessDir, `${id}.flac`);
+
+  try {
+    if (!fs.existsSync(compressedDir)) {
+      fs.mkdirSync(compressedDir, { recursive: true });
+    }
+    if (!fs.existsSync(losslessDir)) {
+      fs.mkdirSync(losslessDir, { recursive: true });
+    }
+
+    if (!fs.existsSync(cacheFilePath)) {
+      console.log(`[${new Date().toLocaleString()}] 📥 Downloading: ${videoUrl}`);
+      const args = [
+        videoUrl,
+        '-x',
+        '-o', cacheFilePath,
+        '--audio-format', quality === 'compressed' ? 'mp3' : 'flac'
+      ];
+
+      await new Promise((resolve, reject) => {
+        ytDlp.exec(args)
+          .on('close', resolve)
+          .on('error', reject);
+      });
+    }
+
+    const stat = fs.statSync(cacheFilePath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+
+    let start = 0;
+    let end = fileSize - 1;
+    const chunkSize = 500000; // 500KB
+
+    if (range) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      start = parseInt(parts[0], 10);
+      end = parts[1] ? parseInt(parts[1], 10) : Math.min(start + chunkSize - 1, fileSize - 1);
+    } else {
+      end = Math.min(chunkSize - 1, fileSize - 1);
+    }
+
+    const contentLength = end - start + 1;
+
+    const head = {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': contentLength,
+      'Content-Type': quality === 'compressed' ? 'audio/mpeg' : 'audio/flac',
+    };
+
+    res.writeHead(206, head);
+
+    const fileStream = fs.createReadStream(cacheFilePath, { start, end });
+    fileStream.pipe(res);
+
+    console.log(`[${new Date().toLocaleString()}] 📦 Streaming: ${path.basename(cacheFilePath)} | Size: ${(fileSize / (1024 * 1024)).toFixed(2)} MB | Range: ${start}-${end}`);
   } catch (error) {
     console.error(`[${new Date().toLocaleString()}] 💥 Error: ${error instanceof Error ? error.message : String(error)}`);
     res.status(500).send('An error occurred while streaming the audio.');
