@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKERHUB_USERNAME: vleerapp
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+  DOCKERHUB_ORGANIZATION: vleerapp
   DOCKERHUB_REPOSITORY: vleerapp/backend
   GITHUB_REGISTRY: ghcr.io
   GITHUB_IMAGE_NAME: ${{ github.repository_owner }}/backend
@@ -27,7 +28,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
