@@ -2,10 +2,10 @@
 
 To run this instance yourself you can choose between hub.docker.com or github packages
 ```zsh
-docker run -d -p 3000:3000 ghcr.io/vleerapp/backend:latest
+docker run -d --name vleer-backend -p 3000:3000 ghcr.io/vleerapp/backend:latest
 ```
 ```zsh
-docker run -d -p 3000:3000 vleerapp/backend:latest
+docker run -d --name vleer-backend -p 3000:3000 vleerapp/backend:latest
 ```
 
 
