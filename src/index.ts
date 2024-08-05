@@ -15,7 +15,7 @@ app.get('/', (req, res) => {
 app.get('/download', async (req, res) => {
   const { id, quality } = req.query;
   if (!id || typeof id !== 'string' || !quality || (quality !== 'compressed' && quality !== 'lossless')) {
-    console.log('Invalid or missing id or quality parameter');
+    console.error(`[${new Date().toLocaleString()}] 🚫 Invalid request: ${JSON.stringify({ id, quality })}`);
     return res.status(400).json({ error: 'Invalid or missing id or quality parameter' });
   }
 
@@ -29,22 +29,22 @@ app.get('/download', async (req, res) => {
 
   try {
     if (fs.existsSync(cacheFilePath)) {
-      console.log(`Cached file found for id: ${id}, quality: ${quality}`);
+      const fileSize = fs.statSync(cacheFilePath).size / (1024 * 1024);
+      console.log(`[${new Date().toLocaleString()}] 📦 Serving cached: ${path.basename(cacheFilePath)} | Size: ${fileSize.toFixed(2)} MB`);
       return res.sendFile(cacheFilePath);
     }
 
-    console.log(`Cache miss for id: ${id}, quality: ${quality}, downloading...`);
     if (!fs.existsSync(compressedDir)) {
-      console.log('Creating compressed cache directory');
       fs.mkdirSync(compressedDir, { recursive: true });
     }
     if (!fs.existsSync(losslessDir)) {
-      console.log('Creating lossless cache directory');
       fs.mkdirSync(losslessDir, { recursive: true });
     }
 
     const ytDlp = new YTDlpWrap();
 
+    console.log(`[${new Date().toLocaleString()}] 📥 Downloading: ${videoUrl}`);
+    const startTime = Date.now();
     await new Promise<void>((resolve, reject) => {
       const args = [
         videoUrl,
@@ -60,26 +60,24 @@ app.get('/download', async (req, res) => {
 
       ytDlp.exec(args).on('close', () => {
         if (fs.existsSync(cacheFilePath)) {
-          console.log(`Download completed for id: ${id}, quality: ${quality}`);
+          const endTime = Date.now();
+          const fileSize = fs.statSync(cacheFilePath).size / (1024 * 1024);
+          const duration = endTime - startTime;
+          console.log(`[${new Date().toLocaleString()}] ✅ Download complete: ${path.basename(cacheFilePath)} | Size: ${fileSize.toFixed(2)} MB | Duration: ${duration} ms`);
           resolve();
         } else {
-          console.error(`Audio file not found after download for id: ${id}, quality: ${quality}`);
           reject(new Error('Audio file not found after download'));
         }
-      }).on('error', (error) => {
-        console.error(`Error during download for id: ${id}, quality: ${quality}`, error);
-        reject(error);
-      });
+      }).on('error', reject);
     });
 
-    console.log(`Sending file for id: ${id}, quality: ${quality}`);
     res.sendFile(cacheFilePath);
   } catch (error) {
-    console.error(`An error occurred for id: ${id}, quality: ${quality}:`, error);
+    console.error(`[${new Date().toLocaleString()}] 💥 Error: ${error instanceof Error ? error.message : String(error)}`);
     res.status(500).send('An error occurred while streaming the audio.');
   }
 });
 
 app.listen(port, '0.0.0.0', () => {
-  console.log(`Server running on port :${port}`);
+  console.log(`[${new Date().toLocaleString()}] 🚀 Server running on port :${port}`);
 });
