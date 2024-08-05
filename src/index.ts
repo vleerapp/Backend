@@ -2,7 +2,6 @@ import express from 'express';
 import YTDlpWrap from 'yt-dlp-wrap';
 import fs from 'fs';
 import path from 'path';
-import { Readable, Transform } from 'stream';
 
 const ytDlp = new YTDlpWrap();
 const app = express();
@@ -25,9 +24,9 @@ app.get('/download', async (req, res) => {
   const cacheDir = path.resolve(process.cwd(), 'cache');
   const compressedDir = path.join(cacheDir, 'compressed');
   const losslessDir = path.join(cacheDir, 'lossless');
-  const cacheFilePath = quality === 'compressed' 
+  const cacheFilePath = quality === 'compressed'
     ? path.join(compressedDir, `${id}.mp3`)
-    : path.join(losslessDir, `${id}.wav`);
+    : path.join(losslessDir, `${id}.flac`);
 
   try {
     if (fs.existsSync(cacheFilePath)) {
@@ -43,8 +42,6 @@ app.get('/download', async (req, res) => {
       fs.mkdirSync(losslessDir, { recursive: true });
     }
 
-    const ytDlp = new YTDlpWrap();
-
     console.log(`[${new Date().toLocaleString()}] 📥 Downloading: ${videoUrl}`);
     const startTime = Date.now();
     await new Promise<void>((resolve, reject) => {
@@ -52,13 +49,8 @@ app.get('/download', async (req, res) => {
         videoUrl,
         '-x',
         '-o', cacheFilePath,
+        '--audio-format', quality === 'compressed' ? 'mp3' : 'flac'
       ];
-
-      if (quality === 'compressed') {
-        args.push('--audio-format', 'mp3');
-      } else {
-        args.push('--audio-format', 'wav');
-      }
 
       ytDlp.exec(args).on('close', () => {
         if (fs.existsSync(cacheFilePath)) {
@@ -105,6 +97,7 @@ app.get('/stream', async (req, res) => {
 
     if (!fs.existsSync(cacheFilePath)) {
       console.log(`[${new Date().toLocaleString()}] 📥 Downloading: ${videoUrl}`);
+      const startTime = Date.now();
       const args = [
         videoUrl,
         '-x',
@@ -114,7 +107,13 @@ app.get('/stream', async (req, res) => {
 
       await new Promise((resolve, reject) => {
         ytDlp.exec(args)
-          .on('close', resolve)
+          .on('close', () => {
+            const endTime = Date.now();
+            const fileSize = fs.statSync(cacheFilePath).size / (1024 * 1024);
+            const duration = endTime - startTime;
+            console.log(`[${new Date().toLocaleString()}] ✅ Download complete: ${path.basename(cacheFilePath)} | Size: ${fileSize.toFixed(2)} MB | Duration: ${duration} ms`);
+            resolve();
+          })
           .on('error', reject);
       });
     }
@@ -125,7 +124,7 @@ app.get('/stream', async (req, res) => {
 
     let start = 0;
     let end = fileSize - 1;
-    const chunkSize = 500000; // 500KB
+    const chunkSize = 500000;
 
     if (range) {
       const parts = range.replace(/bytes=/, "").split("-");
