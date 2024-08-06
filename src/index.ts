@@ -2,6 +2,8 @@ import express from 'express';
 import YTDlpWrap from 'yt-dlp-wrap';
 import fs from 'fs';
 import path from 'path';
+import { selectBestPipedInstance, getSelectedInstance } from './piped';
+import axios from 'axios';
 
 const ytDlp = new YTDlpWrap();
 const app = express();
@@ -155,6 +157,48 @@ app.get('/stream', async (req, res) => {
   }
 });
 
+app.get('/search', async (req, res) => {
+  const { query } = req.query;
+  if (!query || typeof query !== 'string') {
+    console.error(`[${new Date().toLocaleString()}] 🚫 Invalid search query: ${JSON.stringify(query)}`);
+    res.status(400).json({ error: 'Invalid or missing query parameter' });
+    return;
+  }
+
+  console.log(`[${new Date().toLocaleString()}] 🔍 Searching for: "${query}"`);
+  const startTime = Date.now();
+
+  try {
+    const instance = getSelectedInstance();
+    const response = await axios.get(`${instance}/search`, {
+      params: { q: query, filter: 'music_songs' }
+    });
+    const results = response.data.items;
+    const flattenedResults = results.reduce((acc, song) => {
+      const id = song.url.split('v=')[1];
+      acc[id] = {
+        id,
+        title: song.title,
+        artist: song.uploaderName,
+        thumbnailUrl: song.thumbnail,
+        duration: song.duration
+      };
+      return acc;
+    }, {});
+
+    const endTime = Date.now();
+    const duration = endTime - startTime;
+    console.log(`[${new Date().toLocaleString()}] ✅ Search complete: "${query}" | Results: ${Object.keys(flattenedResults).length} | Duration: ${duration} ms`);
+
+    res.json(flattenedResults);
+  } catch (error) {
+    console.error(`[${new Date().toLocaleString()}] 💥 Search error for "${query}": ${error instanceof Error ? error.message : String(error)}`);
+    res.status(500).json({ error: 'An error occurred while searching' });
+  }
+});
+
 app.listen(port, '0.0.0.0', () => {
   console.log(`[${new Date().toLocaleString()}] 🚀 Server running on port :${port}`);
 });
+
+selectBestPipedInstance();
