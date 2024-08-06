@@ -7,7 +7,7 @@ RUN apt-get update && \
     pip3 install yt-dlp && \
     apt-get clean
 
-COPY package.json bun.lockb ./
+COPY package.json ./
 
 RUN bun install && \
     bun add -d typescript
