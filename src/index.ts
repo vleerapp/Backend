@@ -174,7 +174,7 @@ app.get('/search', async (req, res) => {
       params: { q: query, filter: 'music_songs' }
     });
     const results = response.data.items;
-    const flattenedResults = results.reduce((acc, song) => {
+    const flattenedResults = results.reduce((acc: Record<string, any>, song: any) => {
       const id = song.url.split('v=')[1];
       acc[id] = {
         id,
