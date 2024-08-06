@@ -5,7 +5,6 @@
     "@types/express": "^4.17.21",
     "axios": "^1.7.3",
     "express": "^4.19.2",
-    "node-youtube-music": "https://github.com/pedrazadixon/node-youtube-music",
     "nodemon": "^3.1.4",
     "yt-dlp-wrap": "^2.3.12"
   },
