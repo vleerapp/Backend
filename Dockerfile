@@ -2,17 +2,14 @@ FROM oven/bun:1
 
 WORKDIR /usr/src/app
 
-RUN --mount=type=cache,target=/var/cache/apt \
-    --mount=type=cache,target=/var/lib/apt \
-    apt-get update && \
+RUN apt-get update && \
     apt-get install -y python3-pip ffmpeg && \
     pip3 install yt-dlp && \
     apt-get clean
 
 COPY package.json bun.lockb ./
 
-RUN --mount=type=cache,target=/root/.bun \
-    bun install && \
+RUN bun install && \
     bun add -d typescript
 
 COPY . .
