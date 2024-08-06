@@ -105,7 +105,7 @@ app.get('/stream', async (req, res) => {
         '--audio-format', quality === 'compressed' ? 'mp3' : 'flac'
       ];
 
-      await new Promise((resolve, reject) => {
+      await new Promise<void>((resolve, reject) => {
         ytDlp.exec(args)
           .on('close', () => {
             const endTime = Date.now();
