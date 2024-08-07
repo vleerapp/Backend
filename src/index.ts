@@ -25,6 +25,24 @@ if (fs.existsSync(CACHE_FILE)) {
 const saveCache = () => {
   fs.writeFileSync(CACHE_FILE, JSON.stringify(searchCache), 'utf-8');
 };
+
+// init weights cache
+const WEIGHTS_FILE = './weights.json';
+let weights: Record<string, number> = {};
+
+if (fs.existsSync(WEIGHTS_FILE)) {
+  weights = JSON.parse(fs.readFileSync(WEIGHTS_FILE, 'utf-8'));
+}
+
+const saveWeights = () => {
+  fs.writeFileSync(WEIGHTS_FILE, JSON.stringify(weights), 'utf-8');
+};
+
+const updateWeight = (id: string) => {
+  weights[id] = (weights[id] || 0) + 1;
+  saveWeights();
+};
+
 /////////////////////
 
 app.use(express.json());
@@ -85,6 +103,7 @@ app.get('/download', async (req, res) => {
       }).on('error', reject);
     });
 
+    updateWeight(id as string);
     res.sendFile(cacheFilePath);
   } catch (error) {
     console.error(`[${new Date().toLocaleString()}] 💥 Error: ${error instanceof Error ? error.message : String(error)}`);
@@ -215,7 +234,13 @@ app.get('/search', async (req, res) => {
       return acc;
     }, {});
 
-    const sortedResults = Object.values(flattenedResults).sort((a: any, b: any) => b.weight - a.weight);
+    const sortedResults = Object.values(flattenedResults)
+      .sort((a: any, b: any) => {
+        const weightA = weights[a.id] || 0;
+        const weightB = weights[b.id] || 0;
+        if (weightA !== weightB) return weightB - weightA;
+        return b.weight - a.weight;
+      });
 
     const endTime = Date.now();
     const duration = endTime - startTime;
