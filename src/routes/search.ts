@@ -1,17 +1,16 @@
 import express from 'express';
 import axios from 'axios';
 import fs from 'fs';
-import { getSelectedInstance } from '../piped';
+import { selectBestPipedInstance, getSelectedInstance } from '../piped';
 
 const router = express.Router();
-const instance = getSelectedInstance();
+selectBestPipedInstance()
 
 const CACHE_FILE = './cache/search_cache.json';
 const SEARCH_WEIGHTS_FILE = './cache/search_weights.json';
 
 interface SearchCacheItem {
   results: any[];
-  weight: number;
 }
 
 interface SearchResult {
@@ -53,31 +52,35 @@ router.get('/', async (req, res) => {
     return;
   }
 
+  const instance = getSelectedInstance();
   const startTime = Date.now();
 
   try {
     let results: SearchResult[];
+    let isCached = false;
     if (searchCache[query]) {
       results = searchCache[query].results;
+      isCached = true;
     } else {
       const response = await axios.get(`${instance}/search`, {
         params: { q: query, filter: 'music_songs' }
       });
       results = response.data.items;
-      searchCache[query] = { results, weight: 1 };
+      searchCache[query] = { results };
+      saveCache();
     }
 
-    saveCache();
-
     const flattenedResults = results.reduce((acc: Record<string, any>, song: any) => {
-      const id = song.url.split('v=')[1];
-      acc[id] = {
-        id,
-        title: song.title,
-        artist: song.uploaderName,
-        thumbnailUrl: song.thumbnail,
-        duration: song.duration,
-      };
+      const id = song.url?.split('v=')[1] || '';
+      if (id) {
+        acc[id] = {
+          id,
+          title: song.title,
+          artist: song.uploaderName,
+          thumbnailUrl: song.thumbnail,
+          duration: song.duration,
+        };
+      }
       return acc;
     }, {});
 
@@ -117,7 +120,11 @@ router.get('/', async (req, res) => {
 
     const endTime = Date.now();
     const duration = endTime - startTime;
-    console.log(`[${new Date().toLocaleString()}] ✅ Search complete: "${query}" | Duration: ${duration} ms`);
+    if (isCached) {
+      console.log(`[${new Date().toLocaleString()}] ✅ Search (cached): "${query}" | Duration: ${duration} ms`);
+    } else {
+      console.log(`[${new Date().toLocaleString()}] ✅ Search: "${query}" | Duration: ${duration} ms`);
+    }
 
     res.json(sortedResults);
   } catch (error) {
