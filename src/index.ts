@@ -2,12 +2,30 @@ import express from 'express';
 import YTDlpWrap from 'yt-dlp-wrap';
 import fs from 'fs';
 import path from 'path';
-import { selectBestPipedInstance, getSelectedInstance } from './piped';
+import { getSelectedInstance } from './piped';
 import axios from 'axios';
 
+const instance = getSelectedInstance();
 const ytDlp = new YTDlpWrap();
 const app = express();
 const port = 3000;
+
+// init search cache
+const CACHE_FILE = './cache/search_cache.json';
+interface SearchCacheItem {
+  results: any[];
+  weight: number;
+}
+let searchCache: Record<string, SearchCacheItem> = {};
+
+if (fs.existsSync(CACHE_FILE)) {
+  searchCache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
+}
+
+const saveCache = () => {
+  fs.writeFileSync(CACHE_FILE, JSON.stringify(searchCache), 'utf-8');
+};
+/////////////////////
 
 app.use(express.json());
 
@@ -169,11 +187,22 @@ app.get('/search', async (req, res) => {
   const startTime = Date.now();
 
   try {
-    const instance = getSelectedInstance();
-    const response = await axios.get(`${instance}/search`, {
-      params: { q: query, filter: 'music_songs' }
-    });
-    const results = response.data.items;
+    let results;
+    if (searchCache[query]) {
+      results = searchCache[query].results;
+      searchCache[query].weight += 1;
+      console.log(`[${new Date().toLocaleString()}] 📦 Serving cached results for: "${query}"`);
+    } else {
+      const response = await axios.get(`${instance}/search`, {
+        params: { q: query, filter: 'music_songs' }
+      });
+      results = response.data.items;
+      searchCache[query] = { results, weight: 1 };
+    }
+
+    searchCache[query].weight += 1;
+    saveCache();
+
     const flattenedResults = results.reduce((acc: Record<string, any>, song: any) => {
       const id = song.url.split('v=')[1];
       acc[id] = {
@@ -181,16 +210,18 @@ app.get('/search', async (req, res) => {
         title: song.title,
         artist: song.uploaderName,
         thumbnailUrl: song.thumbnail,
-        duration: song.duration
+        duration: song.duration,
       };
       return acc;
     }, {});
 
+    const sortedResults = Object.values(flattenedResults).sort((a: any, b: any) => b.weight - a.weight);
+
     const endTime = Date.now();
     const duration = endTime - startTime;
-    console.log(`[${new Date().toLocaleString()}] ✅ Search complete: "${query}" | Results: ${Object.keys(flattenedResults).length} | Duration: ${duration} ms`);
+    console.log(`[${new Date().toLocaleString()}] ✅ Search complete: "${query}" | Results: ${sortedResults.length} | Duration: ${duration} ms`);
 
-    res.json(flattenedResults);
+    res.json(sortedResults);
   } catch (error) {
     console.error(`[${new Date().toLocaleString()}] 💥 Search error for "${query}": ${error instanceof Error ? error.message : String(error)}`);
     res.status(500).json({ error: 'An error occurred while searching' });
@@ -200,5 +231,3 @@ app.get('/search', async (req, res) => {
 app.listen(port, '0.0.0.0', () => {
   console.log(`[${new Date().toLocaleString()}] 🚀 Server running on port :${port}`);
 });
-
-selectBestPipedInstance();
