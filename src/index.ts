@@ -5,9 +5,14 @@ import searchRouter from './routes/search';
 import searchSpotifyRouter from './routes/searchSpotify';
 
 const app = express();
-const port = 3000;
+const port = 3001;
 
 app.use(express.json());
+
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  next();
+});
 
 app.get('/', (req, res) => {
   res.send('<h1>👋</h1>');
