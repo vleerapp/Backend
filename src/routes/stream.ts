@@ -64,6 +64,11 @@ router.get('/', async (req, res) => {
       const parts = range.replace(/bytes=/, "").split("-");
       start = parseInt(parts[0], 10);
       end = parts[1] ? parseInt(parts[1], 10) : Math.min(start + chunkSize - 1, fileSize - 1);
+
+      if (isNaN(start) || isNaN(end) || start >= fileSize || end >= fileSize || start > end) {
+        res.status(416).send('Requested range not satisfiable');
+        return;
+      }
     } else {
       end = Math.min(chunkSize - 1, fileSize - 1);
     }
