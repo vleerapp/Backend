@@ -9,7 +9,7 @@ let clientId: string | null = null;
 let tokenExpirationTime: number | null = null;
 
 const CACHE_FILE = './cache/spotify_search_cache.json';
-let searchCache: Record<string, MinifiedTrack[]> = {};
+let searchCache: Record<string, Record<string, MinifiedTrack>> = {};
 
 if (fs.existsSync(CACHE_FILE)) {
     searchCache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
@@ -61,12 +61,10 @@ interface SpotifyTrack {
 
 interface MinifiedTrack {
     id: string;
-    name: string;
+    title: string;
     artist: string;
-    album: string;
-    duration_ms: number;
-    preview_url: string;
-    image: string;
+    thumbnailUrl: string;
+    duration: number;
 }
 
 router.get('/', async (req: express.Request, res: express.Response) => {
@@ -98,15 +96,16 @@ router.get('/', async (req: express.Request, res: express.Response) => {
             }
         });
         const data = response.data;
-        const minifiedResults: MinifiedTrack[] = data.tracks.items.map(track => ({
-            id: track.id,
-            name: track.name,
-            artist: track.artists[0].name,
-            album: track.album.name,
-            duration_ms: track.duration_ms,
-            preview_url: track.preview_url,
-            image: track.album.images[0].url
-        }));
+        const minifiedResults: Record<string, MinifiedTrack> = {};
+        data.tracks.items.forEach(track => {
+            minifiedResults[track.id] = {
+                id: track.id,
+                title: track.name,
+                artist: track.artists[0].name,
+                thumbnailUrl: track.album.images[0].url,
+                duration: Math.round(track.duration_ms / 1000)
+            };
+        });
         searchCache[query] = minifiedResults;
         saveCache();
 
