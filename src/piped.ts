@@ -20,7 +20,7 @@ async function pingInstance(instance: PipedInstance): Promise<number> {
 export async function selectBestPipedInstance(): Promise<void> {
   try {
     const response = await axios.get('https://piped-instances.kavin.rocks/');
-    const instances: PipedInstance[] = response.data;
+    const instances: PipedInstance[] = response.data.filter((instance: PipedInstance) => instance.name !== 'phoenixthrush.com' && instance.name !== 'adminforge.de' && instance.name !== 'piped.yt' && instance.name !== 'ehwurscht.at' && instance.name !== 'ggtyler.dev' && instance.name !== 'private.coffee' && instance.name !== 'projectsegfau.lt' && instance.name !== 'privacydev.net');
     instances.push({ name: 'wireway.ch', api_url: 'https://pipedapi.wireway.ch' });
 
     const pingResults = await Promise.all(
