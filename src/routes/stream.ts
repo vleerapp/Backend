@@ -2,6 +2,7 @@ import express from 'express';
 import YTDlpWrap from 'yt-dlp-wrap';
 import fs from 'fs';
 import path from 'path';
+import { log } from '../index';
 
 const router = express.Router();
 const ytDlp = new YTDlpWrap();
@@ -9,7 +10,7 @@ const ytDlp = new YTDlpWrap();
 router.get('/', async (req, res) => {
   const { id, quality } = req.query;
   if (!id || typeof id !== 'string' || !quality || (quality !== 'compressed' && quality !== 'lossless')) {
-    console.error(`[${new Date().toLocaleString()}] 🚫 Invalid request: ${JSON.stringify({ id, quality })}`);
+    log(`🚫 Invalid request: ${JSON.stringify({ id, quality })}`);
     return res.status(400).json({ error: 'Invalid or missing id or quality parameter' });
   }
 
@@ -30,7 +31,7 @@ router.get('/', async (req, res) => {
     }
 
     if (!fs.existsSync(cacheFilePath)) {
-      console.log(`[${new Date().toLocaleString()}] 📥 Downloading: ${videoUrl}`);
+      log(`📥 Downloading: ${videoUrl}`);
       const startTime = Date.now();
       const args = [
         videoUrl,
@@ -45,7 +46,7 @@ router.get('/', async (req, res) => {
             const endTime = Date.now();
             const fileSize = fs.statSync(cacheFilePath).size / (1024 * 1024);
             const duration = endTime - startTime;
-            console.log(`[${new Date().toLocaleString()}] ✅ Download complete: ${path.basename(cacheFilePath)} | Size: ${fileSize.toFixed(2)} MB | Duration: ${duration} ms`);
+            log(`✅ Download complete: ${path.basename(cacheFilePath)} | Size: ${fileSize.toFixed(2)} MB | Duration: ${duration} ms`);
             resolve();
           })
           .on('error', reject);
@@ -87,9 +88,9 @@ router.get('/', async (req, res) => {
     const fileStream = fs.createReadStream(cacheFilePath, { start, end });
     fileStream.pipe(res);
 
-    console.log(`[${new Date().toLocaleString()}] 📦 Streaming: ${path.basename(cacheFilePath)} | Size: ${(fileSize / (1024 * 1024)).toFixed(2)} MB | Range: ${start}-${end}`);
+    log(`📦 Streaming: ${path.basename(cacheFilePath)} | Size: ${(fileSize / (1024 * 1024)).toFixed(2)} MB | Range: ${start}-${end}`);
   } catch (error) {
-    console.error(`[${new Date().toLocaleString()}] 💥 Error: ${error instanceof Error ? error.message : String(error)}`);
+    log(`💥 Error: ${error instanceof Error ? error.message : String(error)}`);
     res.status(500).send('An error occurred while streaming the audio.');
   }
 });

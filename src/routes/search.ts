@@ -2,6 +2,7 @@ import express from 'express';
 import axios from 'axios';
 import fs from 'fs';
 import { selectBestPipedInstance, getSelectedInstance } from '../piped';
+import { log } from '../index';
 
 const router = express.Router();
 selectBestPipedInstance()
@@ -47,7 +48,7 @@ const updateSearchWeight = (query: string, selectedId: string) => {
 router.get('/', async (req, res) => {
   const { query } = req.query;
   if (!query || typeof query !== 'string') {
-    console.error(`[${new Date().toLocaleString()}] 🚫 Invalid search query: ${JSON.stringify(query)}`);
+    log(`🚫 Invalid search query: ${JSON.stringify(query)}`);
     res.status(400).json({ error: 'Invalid or missing query parameter' });
     return;
   }
@@ -121,14 +122,14 @@ router.get('/', async (req, res) => {
     const endTime = Date.now();
     const duration = endTime - startTime;
     if (isCached) {
-      console.log(`[${new Date().toLocaleString()}] ✅ Search (cached): "${query}" | Duration: ${duration} ms`);
+      log(`✅ Search (cached): "${query}" | Duration: ${duration} ms`);
     } else {
-      console.log(`[${new Date().toLocaleString()}] ✅ Search: "${query}" | Duration: ${duration} ms`);
+      log(`✅ Search: "${query}" | Duration: ${duration} ms`);
     }
 
     res.json(sortedResults);
   } catch (error) {
-    console.error(`[${new Date().toLocaleString()}] 💥 Search error for "${query}": ${error instanceof Error ? error.message : String(error)}`);
+    log(`💥 Search error for "${query}": ${error instanceof Error ? error.message : String(error)}`);
     res.status(500).json({ error: 'An error occurred while searching' });
   }
 });

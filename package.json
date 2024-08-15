@@ -3,15 +3,15 @@
   "module": "src/index.ts",
   "dependencies": {
     "@types/express": "^4.17.21",
-    "axios": "^1.7.3",
+    "axios": "^1.7.4",
     "express": "^4.19.2",
     "nodemon": "^3.1.4",
     "yt-dlp-wrap": "^2.3.12"
   },
   "scripts": {
-    "start": "node dist/index.js",
+    "start": "NODE_ENV=production node dist/index.js",
     "build": "bunx tsc",
-    "dev": "nodemon --ignore 'cache/*' --exec bun run src/index.ts"
+    "dev": "NODE_ENV=development nodemon --ignore 'cache/*' --exec bun run src/index.ts"
   },
   "type": "module"
 }

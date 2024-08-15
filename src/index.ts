@@ -7,6 +7,14 @@ import searchSpotifyRouter from './routes/searchSpotify';
 const app = express();
 const port = 3000;
 
+const isDevelopment = process.env.NODE_ENV === 'development';
+
+export const log = (message: string) => {
+  if (isDevelopment) {
+    console.log(`[${new Date().toLocaleString()}] ${message}`);
+  }
+};
+
 app.use(express.json());
 
 app.use((req, res, next) => {
@@ -24,5 +32,5 @@ app.use('/search', searchRouter);
 app.use('/searchSpotify', searchSpotifyRouter);
 
 app.listen(port, '0.0.0.0', () => {
-  console.log(`[${new Date().toLocaleString()}] 🚀 Server running on port :${port}`);
+  log(`🚀 Server running on port :${port}`);
 });

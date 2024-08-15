@@ -1,6 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import fs from 'fs';
+import { log } from '../index';
 
 const router = express.Router();
 
@@ -41,9 +42,9 @@ async function auth(): Promise<boolean> {
             return true;
         }
     } catch (err) {
-        console.error(err);
+        log(`💥 Failed to get access token: ${err instanceof Error ? err.message : String(err)}`);
     }
-    console.error("Failed to get access token");
+    log("Failed to get access token");
     return false;
 }
 
@@ -70,7 +71,7 @@ interface MinifiedTrack {
 router.get('/', async (req: express.Request, res: express.Response) => {
     const { query } = req.query;
     if (!query || typeof query !== 'string') {
-        console.error(`[${new Date().toLocaleString()}] 🚫 Invalid Spotify search query: ${JSON.stringify(query)}`);
+        log(`🚫 Invalid Spotify search query: ${JSON.stringify(query)}`);
         return res.status(400).json({ error: 'Search query is required' });
     }
 
@@ -79,12 +80,12 @@ router.get('/', async (req: express.Request, res: express.Response) => {
     if (searchCache[query]) {
         const endTime = Date.now();
         const duration = endTime - startTime;
-        console.log(`[${new Date().toLocaleString()}] ✅ Spotify search (cached): "${query}" | Duration: ${duration} ms`);
+        log(`✅ Spotify search (cached): "${query}" | Duration: ${duration} ms`);
         return res.json(searchCache[query]);
     }
 
     if (!(await auth())) {
-        console.error(`[${new Date().toLocaleString()}] 💥 Spotify authentication failed for query: "${query}"`);
+        log(`💥 Spotify authentication failed for query: "${query}"`);
         return res.status(500).json({ error: 'Failed to authenticate' });
     }
 
@@ -111,11 +112,11 @@ router.get('/', async (req: express.Request, res: express.Response) => {
 
         const endTime = Date.now();
         const duration = endTime - startTime;
-        console.log(`[${new Date().toLocaleString()}] ✅ Spotify search: "${query}" | Duration: ${duration} ms`);
+        log(`✅ Spotify search: "${query}" | Duration: ${duration} ms`);
 
         res.json(minifiedResults);
     } catch (error) {
-        console.error(`[${new Date().toLocaleString()}] 💥 Spotify search error for "${query}": ${error instanceof Error ? error.message : String(error)}`);
+        log(`💥 Spotify search error for "${query}": ${error instanceof Error ? error.message : String(error)}`);
         res.status(500).json({ error: 'Failed to fetch search results' });
     }
 });
