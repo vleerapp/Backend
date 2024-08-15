@@ -71,7 +71,6 @@ router.get('/', async (req, res) => {
         params: { q: query, filter: 'music_songs' }
       });
       results = response.data.items;
-      console.log(results);
       searchCache[query] = { results };
       saveCache();
     }
