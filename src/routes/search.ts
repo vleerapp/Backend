@@ -21,13 +21,17 @@ interface SearchResult {
 let searchCache: Record<string, SearchCacheItem> = {};
 let searchWeights: Record<string, Record<string, number>> = {};
 
-if (fs.existsSync(CACHE_FILE)) {
-  searchCache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
-}
+const initializeCache = () => {
+  if (fs.existsSync(CACHE_FILE)) {
+    searchCache = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
+  }
 
-if (fs.existsSync(SEARCH_WEIGHTS_FILE)) {
-  searchWeights = JSON.parse(fs.readFileSync(SEARCH_WEIGHTS_FILE, 'utf-8'));
-}
+  if (fs.existsSync(SEARCH_WEIGHTS_FILE)) {
+    searchWeights = JSON.parse(fs.readFileSync(SEARCH_WEIGHTS_FILE, 'utf-8'));
+  }
+};
+
+initializeCache();
 
 const saveCache = () => {
   fs.writeFileSync(CACHE_FILE, JSON.stringify(searchCache), 'utf-8');
@@ -67,6 +71,7 @@ router.get('/', async (req, res) => {
         params: { q: query, filter: 'music_songs' }
       });
       results = response.data.items;
+      console.log(results);
       searchCache[query] = { results };
       saveCache();
     }
