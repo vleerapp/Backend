@@ -6,7 +6,7 @@ import searchSpotifyRouter from './routes/searchSpotify';
 import thumbnailRouter from './routes/thumbnail';
 
 const app = express();
-const port = 3001;
+const port = 3000;
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 
