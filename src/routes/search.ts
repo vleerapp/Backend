@@ -3,6 +3,7 @@ import axios from 'axios';
 import fs from 'fs';
 import { selectBestPipedInstance, getSelectedInstance } from '../piped';
 import { log } from '../index';
+import { Album, Playlist, Song } from '../types/types';
 
 const router = express.Router();
 selectBestPipedInstance()
@@ -49,8 +50,16 @@ const updateSearchWeight = (query: string, selectedId: string) => {
   saveSearchWeights();
 };
 
+type FilterType = 'songs' | 'albums' | 'playlists';
+
+interface SearchResponse {
+  songs: Record<string, Song>;
+  albums: Record<string, Album>;
+  playlists: Record<string, Playlist>;
+}
+
 router.get('/', async (req, res) => {
-  const { query } = req.query;
+  const { filter, query } = req.query;
   if (!query || typeof query !== 'string') {
     log(`🚫 Invalid search query: ${JSON.stringify(query)}`);
     res.status(400).json({ error: 'Invalid or missing query parameter' });
@@ -59,84 +68,114 @@ router.get('/', async (req, res) => {
 
   const instance = getSelectedInstance();
   const startTime = Date.now();
+  const filters: Record<FilterType, string> = {
+    albums: 'music_albums',
+    playlists: 'music_playlists',
+    songs: 'music_songs',
+  };
 
   try {
-    let results: SearchResult[];
+    let results: any[] = [];
     let isCached = false;
+    const filtersToSearch: FilterType[] = filter ? [filter as FilterType] : ['albums', 'playlists', 'songs'];
+
     if (searchCache[query]) {
       results = searchCache[query].results;
       isCached = true;
     } else {
-      const response = await axios.get(`${instance}/search`, {
-        params: { q: query, filter: 'music_songs' }
-      });
-      results = response.data.items;
+      const searchPromises = filtersToSearch.map(f => 
+        axios.get(`${instance}/search`, {
+          params: { q: query, filter: filters[f] }
+        })
+      );
+
+      const responses = await Promise.all(searchPromises);
+      results = responses.flatMap(response => response.data.items);
+
       searchCache[query] = { results };
       saveCache();
     }
 
-    const flattenedResults = results.reduce((acc: Record<string, any>, song: any) => {
-      const id = song.url?.split('v=')[1] || '';
-      if (id) {
-        acc[id] = {
-          id,
-          title: song.title,
-          artist: song.uploaderName,
-          thumbnailUrl: song.thumbnail,
-          duration: song.duration,
-        };
-      }
-      return acc;
-    }, {});
-
-    const getWeight = (id: string, title: string, artist: string) => {
-      let weight = 0;
-      const lowerQuery = query.toLowerCase();
-      const lowerTitle = title.toLowerCase();
-      const lowerArtist = artist.toLowerCase();
-
-      Object.keys(searchWeights).forEach(savedQuery => {
-        if (lowerQuery.includes(savedQuery.toLowerCase()) || savedQuery.toLowerCase().includes(lowerQuery)) {
-          weight += searchWeights[savedQuery][id] || 0;
-        }
-      });
-
-      if (lowerTitle.includes(lowerQuery) || lowerArtist.includes(lowerQuery)) {
-        weight += 1;
-      }
-
-      return weight;
+    const flattenedResults: SearchResponse = {
+      albums: {},
+      playlists: {},
+      songs: {},
     };
 
-    const sortedResults = Object.entries(flattenedResults)
-      .sort(([idA, a]: [string, any], [idB, b]: [string, any]) => {
-        const weightA = getWeight(idA, a.title, a.artist);
-        const weightB = getWeight(idB, b.title, b.artist);
+    const fetchPromises: Promise<void>[] = [];
 
-        if (weightA === weightB) {
-          return results.findIndex((item: SearchResult) => item.url.includes(idA)) - results.findIndex((item: SearchResult) => item.url.includes(idB));
-        }
-        return weightB - weightA;
-      })
-      .reduce((acc, [id, value]) => {
-        acc[id] = value;
-        return acc;
-      }, {} as Record<string, any>);
+    results.forEach(item => {
+      const id = item.url?.split('v=')[1] || '';
+      if (!id) return;
+
+      switch (item.type) {
+        case 'stream':
+          flattenedResults.songs[id] = {
+            id,
+            title: item.title,
+            artist: item.uploaderName,
+            album: '',
+            cover: item.thumbnail,
+            duration: item.duration,
+          };
+          break;
+        case 'playlist':
+          flattenedResults.playlists[id] = {
+            id,
+            name: item.title,
+            author: item.uploaderName,
+            cover: item.thumbnail,
+            songs: [],
+          };
+          fetchPromises.push(fetchSongs(instance, id, 'playlist', flattenedResults.playlists[id]));
+          break;
+        case 'album':
+          flattenedResults.albums[id] = {
+            id,
+            name: item.title,
+            author: item.uploaderName,
+            cover: item.thumbnail,
+            songs: [],
+          };
+          fetchPromises.push(fetchSongs(instance, id, 'album', flattenedResults.albums[id]));
+          break;
+      }
+    });
+
+    await Promise.all(fetchPromises);
 
     const endTime = Date.now();
     const duration = endTime - startTime;
     if (isCached) {
       log(`✅ Search (cached): "${query}" | Duration: ${duration} ms`);
     } else {
-      log(`✅ Search: "${query}" | Duration: ${duration} ms`);
+      log(`✅ Search: "${query}" | Filters: ${filtersToSearch.join(', ')} | Duration: ${duration} ms`);
     }
 
-    res.json(sortedResults);
+    res.json(flattenedResults);
+
   } catch (error) {
     log(`💥 Search error for "${query}": ${error instanceof Error ? error.message : String(error)}`);
     res.status(500).json({ error: 'An error occurred while searching' });
   }
 });
+
+async function fetchSongs(instance: string, id: string, type: 'playlist' | 'album', container: Album | Playlist) {
+  try {
+    const response = await axios.get(`${instance}/${type}?id=${id}`);
+    const relatedStreams = response.data.relatedStreams || [];
+    container.songs = relatedStreams.map((stream: any) => ({
+      album: type === 'album' ? response.data.name : '',
+      artist: stream.uploaderName,
+      cover: stream.thumbnail,
+      duration: stream.duration,
+      id: stream.url?.split('v=')[1] || '',
+      title: stream.title,
+    }));
+  } catch (error) {
+    log(`💥 Error fetching songs for ${type} ${id}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 
 router.post('/update-weight', (req, res) => {
   const { query, selectedId } = req.body;
