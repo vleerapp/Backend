@@ -12,7 +12,13 @@ const CACHE_FILE = './cache/search_cache.json';
 const SEARCH_WEIGHTS_FILE = './cache/search_weights.json';
 
 interface SearchCacheItem {
-  results: any[];
+  results: SearchResponse;
+}
+
+interface SearchResponse {
+  albums: Record<string, Album>;
+  playlists: Record<string, Playlist>;
+  songs: Record<string, Song>;
 }
 
 interface SearchResult {
@@ -52,12 +58,6 @@ const updateSearchWeight = (query: string, selectedId: string) => {
 
 type FilterType = 'songs' | 'albums' | 'playlists';
 
-interface SearchResponse {
-  songs: Record<string, Song>;
-  albums: Record<string, Album>;
-  playlists: Record<string, Playlist>;
-}
-
 router.get('/', async (req, res) => {
   const { filter, query } = req.query;
   if (!query || typeof query !== 'string') {
@@ -75,7 +75,11 @@ router.get('/', async (req, res) => {
   };
 
   try {
-    let results: any[] = [];
+    let results: SearchResponse = {
+      albums: {},
+      playlists: {},
+      songs: {},
+    };
     let isCached = false;
     const filtersToSearch: FilterType[] = filter ? [filter as FilterType] : ['albums', 'playlists', 'songs'];
 
@@ -90,59 +94,53 @@ router.get('/', async (req, res) => {
       );
 
       const responses = await Promise.all(searchPromises);
-      results = responses.flatMap(response => response.data.items);
+      const rawResults = responses.flatMap(response => response.data.items);
+
+      const fetchPromises: Promise<void>[] = [];
+
+      rawResults.forEach(item => {
+        const id = item.url?.split('v=')[1] || '';
+        if (!id) return;
+
+        switch (item.type) {
+          case 'stream':
+            results.songs[id] = {
+              id,
+              title: item.title,
+              artist: item.uploaderName,
+              album: '',
+              cover: item.thumbnail,
+              duration: item.duration,
+            };
+            break;
+          case 'playlist':
+            results.playlists[id] = {
+              id,
+              name: item.title,
+              author: item.uploaderName,
+              cover: item.thumbnail,
+              songs: [],
+            };
+            fetchPromises.push(fetchSongs(instance, id, 'playlist', results.playlists[id]));
+            break;
+          case 'album':
+            results.albums[id] = {
+              id,
+              name: item.title,
+              author: item.uploaderName,
+              cover: item.thumbnail,
+              songs: [],
+            };
+            fetchPromises.push(fetchSongs(instance, id, 'album', results.albums[id]));
+            break;
+        }
+      });
+
+      await Promise.all(fetchPromises);
 
       searchCache[query] = { results };
       saveCache();
     }
-
-    const flattenedResults: SearchResponse = {
-      albums: {},
-      playlists: {},
-      songs: {},
-    };
-
-    const fetchPromises: Promise<void>[] = [];
-
-    results.forEach(item => {
-      const id = item.url?.split('v=')[1] || '';
-      if (!id) return;
-
-      switch (item.type) {
-        case 'stream':
-          flattenedResults.songs[id] = {
-            id,
-            title: item.title,
-            artist: item.uploaderName,
-            album: '',
-            cover: item.thumbnail,
-            duration: item.duration,
-          };
-          break;
-        case 'playlist':
-          flattenedResults.playlists[id] = {
-            id,
-            name: item.title,
-            author: item.uploaderName,
-            cover: item.thumbnail,
-            songs: [],
-          };
-          fetchPromises.push(fetchSongs(instance, id, 'playlist', flattenedResults.playlists[id]));
-          break;
-        case 'album':
-          flattenedResults.albums[id] = {
-            id,
-            name: item.title,
-            author: item.uploaderName,
-            cover: item.thumbnail,
-            songs: [],
-          };
-          fetchPromises.push(fetchSongs(instance, id, 'album', flattenedResults.albums[id]));
-          break;
-      }
-    });
-
-    await Promise.all(fetchPromises);
 
     const endTime = Date.now();
     const duration = endTime - startTime;
@@ -152,7 +150,7 @@ router.get('/', async (req, res) => {
       log(`✅ Search: "${query}" | Filters: ${filtersToSearch.join(', ')} | Duration: ${duration} ms`);
     }
 
-    res.json(flattenedResults);
+    res.json(results);
 
   } catch (error) {
     log(`💥 Search error for "${query}": ${error instanceof Error ? error.message : String(error)}`);
