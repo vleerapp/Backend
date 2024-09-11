@@ -1,8 +1,8 @@
-import express from 'express';
 import axios from 'axios';
+import express from 'express';
 import fs from 'fs';
-import { selectBestPipedInstance, getSelectedInstance } from '../piped';
 import { log } from '../index';
+import { selectBestPipedInstance, getSelectedInstance } from '../piped';
 import { Album, Playlist, Song } from '../types/types';
 
 const router = express.Router();
@@ -13,16 +13,13 @@ const SEARCH_WEIGHTS_FILE = './cache/search_weights.json';
 
 interface SearchCacheItem {
   results: SearchResponse;
+  timestamp: number;
 }
 
 interface SearchResponse {
   albums: Record<string, Album>;
   playlists: Record<string, Playlist>;
   songs: Record<string, Song>;
-}
-
-interface SearchResult {
-  url: string;
 }
 
 let searchCache: Record<string, SearchCacheItem> = {};
@@ -83,27 +80,40 @@ router.get('/', async (req, res) => {
     let isCached = false;
     const filtersToSearch: FilterType[] = filter ? [filter as FilterType] : ['albums', 'playlists', 'songs'];
 
-    if (searchCache[query]) {
+    if (searchCache[query] && filtersToSearch.every(f => Object.keys(searchCache[query].results[f]).length > 0)) {
       results = searchCache[query].results;
       isCached = true;
     } else {
       const searchPromises = filtersToSearch.map(f => 
         axios.get(`${instance}/search`, {
-          params: { q: query, filter: filters[f] }
+          params: { q: query, filter: filters[f], _internalType: f }
         })
       );
 
       const responses = await Promise.all(searchPromises);
-      const rawResults = responses.flatMap(response => response.data.items);
+      const rawResults = responses.flatMap(response => {
+        const internalType = response.config.params._internalType;
+        return response.data.items.map((item: any) => ({ ...item, _internalType: internalType }));
+      });
 
       const fetchPromises: Promise<void>[] = [];
 
       rawResults.forEach(item => {
-        const id = item.url?.split('v=')[1] || '';
+        let id = '';
+        if (item.url) {
+          if (item.url.includes('list=')) {
+            id = item.url.split('list=')[1];
+          } else if (item.url.includes('v=')) {
+            id = item.url.split('v=')[1];
+          } else {
+            const urlParts = item.url.split('/');
+            id = urlParts[urlParts.length - 1];
+          }
+        }
         if (!id) return;
 
-        switch (item.type) {
-          case 'stream':
+        switch (item._internalType) {
+          case 'songs':
             results.songs[id] = {
               id,
               title: item.title,
@@ -113,39 +123,62 @@ router.get('/', async (req, res) => {
               duration: item.duration,
             };
             break;
-          case 'playlist':
-            results.playlists[id] = {
-              id,
-              name: item.title,
-              author: item.uploaderName,
-              cover: item.thumbnail,
-              songs: [],
-            };
-            fetchPromises.push(fetchSongs(instance, id, 'playlist', results.playlists[id]));
-            break;
-          case 'album':
+          case 'albums':
             results.albums[id] = {
               id,
-              name: item.title,
+              name: item.name,
               author: item.uploaderName,
               cover: item.thumbnail,
               songs: [],
             };
             fetchPromises.push(fetchSongs(instance, id, 'album', results.albums[id]));
             break;
+          case 'playlists':
+            results.playlists[id] = {
+              id,
+              name: item.name,
+              author: item.uploaderName,
+              cover: item.thumbnail,
+              songs: [],
+            };
+            fetchPromises.push(fetchSongs(instance, id, 'playlist', results.playlists[id]));
+            break;
         }
       });
 
       await Promise.all(fetchPromises);
 
-      searchCache[query] = { results };
+      if (!searchCache[query]) {
+        searchCache[query] = {
+          results: {
+            albums: {},
+            playlists: {},
+            songs: {},
+          },
+          timestamp: Date.now(),
+        };
+      }
+      filtersToSearch.forEach(f => {
+        (searchCache[query].results[f] as Record<string, Album | Playlist | Song>) = results[f];
+      });
+      searchCache[query].timestamp = Date.now();
       saveCache();
+    }
+    
+    if (filter) {
+      const filteredResults = {
+        albums: {},
+        playlists: {},
+        songs: {},
+      };
+      filteredResults[filter as FilterType] = results[filter as FilterType];
+      results = filteredResults;
     }
 
     const endTime = Date.now();
     const duration = endTime - startTime;
     if (isCached) {
-      log(`✅ Search (cached): "${query}" | Duration: ${duration} ms`);
+      log(`✅ Search (cached): "${query}" | Filter: ${filter || 'all'} | Duration: ${duration} ms`);
     } else {
       log(`✅ Search: "${query}" | Filters: ${filtersToSearch.join(', ')} | Duration: ${duration} ms`);
     }
@@ -160,15 +193,15 @@ router.get('/', async (req, res) => {
 
 async function fetchSongs(instance: string, id: string, type: 'playlist' | 'album', container: Album | Playlist) {
   try {
-    const response = await axios.get(`${instance}/${type}?id=${id}`);
+    const response = await axios.get(`${instance}/playlists/${id}`);
     const relatedStreams = response.data.relatedStreams || [];
     container.songs = relatedStreams.map((stream: any) => ({
-      album: type === 'album' ? response.data.name : '',
-      artist: stream.uploaderName,
-      cover: stream.thumbnail,
-      duration: stream.duration,
       id: stream.url?.split('v=')[1] || '',
       title: stream.title,
+      artist: stream.uploaderName,
+      album: type === 'album' ? response.data.name : '',
+      cover: stream.thumbnail,
+      duration: stream.duration,
     }));
   } catch (error) {
     log(`💥 Error fetching songs for ${type} ${id}: ${error instanceof Error ? error.message : String(error)}`);
