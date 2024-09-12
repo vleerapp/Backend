@@ -1,11 +1,10 @@
 import express from 'express';
-import YTDlpWrap from 'yt-dlp-wrap';
-import fs from 'fs';
-import path from 'path';
+import ytdl from '@distube/ytdl-core';
 import { log } from '../index';
 
 const router = express.Router();
-const ytDlp = new YTDlpWrap();
+
+const CHUNK_SIZE = 500 * 1024; // 500 KB chunks
 
 router.get('/', async (req, res) => {
   const { id, quality } = req.query;
@@ -15,80 +14,81 @@ router.get('/', async (req, res) => {
   }
 
   const videoUrl = `https://www.youtube.com/watch?v=${id}`;
-  const cacheDir = path.resolve(process.cwd(), 'cache');
-  const compressedDir = path.join(cacheDir, 'compressed');
-  const losslessDir = path.join(cacheDir, 'lossless');
-  const cacheFilePath = quality === 'compressed'
-    ? path.join(compressedDir, `${id}.mp3`)
-    : path.join(losslessDir, `${id}.flac`);
 
   try {
-    if (!fs.existsSync(compressedDir)) {
-      fs.mkdirSync(compressedDir, { recursive: true });
-    }
-    if (!fs.existsSync(losslessDir)) {
-      fs.mkdirSync(losslessDir, { recursive: true });
-    }
+    log(`🎵 Streaming: ${videoUrl}`);
 
-    if (!fs.existsSync(cacheFilePath)) {
-      log(`📥 Downloading: ${videoUrl}`);
-      const startTime = Date.now();
-      const args = [
-        videoUrl,
-        '-x',
-        '-o', cacheFilePath,
-        '--audio-format', quality === 'compressed' ? 'mp3' : 'flac'
-      ];
+    const info = await ytdl.getInfo(videoUrl);
+    const audioFormat = ytdl.chooseFormat(info.formats, {
+      quality: quality === 'compressed' ? 'lowestaudio' : 'highestaudio',
+    });
 
-      await new Promise<void>((resolve, reject) => {
-        ytDlp.exec(args)
-          .on('close', () => {
-            const endTime = Date.now();
-            const fileSize = fs.statSync(cacheFilePath).size / (1024 * 1024);
-            const duration = endTime - startTime;
-            log(`✅ Download complete: ${path.basename(cacheFilePath)} | Size: ${fileSize.toFixed(2)} MB | Duration: ${duration} ms`);
-            resolve();
-          })
-          .on('error', reject);
-      });
+    if (!audioFormat) {
+      throw new Error('No suitable audio format found');
     }
 
-    const stat = fs.statSync(cacheFilePath);
-    const fileSize = stat.size;
+    const totalLength = parseInt(audioFormat.contentLength, 10);
     const range = req.headers.range;
 
     let start = 0;
-    let end = fileSize - 1;
-    const chunkSize = 500000;
+    let end = totalLength - 1;
 
     if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
+      const parts = range.replace(/bytes=/, '').split('-');
       start = parseInt(parts[0], 10);
-      end = parts[1] ? parseInt(parts[1], 10) : Math.min(start + chunkSize - 1, fileSize - 1);
+      end = parts[1] ? parseInt(parts[1], 10) : Math.min(start + CHUNK_SIZE - 1, totalLength - 1);
 
-      if (isNaN(start) || isNaN(end) || start >= fileSize || end >= fileSize || start > end) {
+      if (isNaN(start) || isNaN(end) || start >= totalLength || end >= totalLength || start > end) {
         res.status(416).send('Requested range not satisfiable');
         return;
       }
     } else {
-      end = Math.min(chunkSize - 1, fileSize - 1);
+      end = Math.min(CHUNK_SIZE - 1, totalLength - 1);
     }
 
     const contentLength = end - start + 1;
 
-    const head = {
-      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${totalLength}`,
       'Accept-Ranges': 'bytes',
       'Content-Length': contentLength,
-      'Content-Type': quality === 'compressed' ? 'audio/mpeg' : 'audio/flac',
-    };
+      'Content-Type': audioFormat.mimeType,
+    });
 
-    res.writeHead(206, head);
+    const stream = ytdl(videoUrl, {
+      format: audioFormat,
+      range: { start, end },
+    });
 
-    const fileStream = fs.createReadStream(cacheFilePath, { start, end });
-    fileStream.pipe(res);
+    let bytesSent = 0;
 
-    log(`📦 Streaming: ${path.basename(cacheFilePath)} | Size: ${(fileSize / (1024 * 1024)).toFixed(2)} MB | Range: ${start}-${end}`);
+    stream.on('data', (chunk) => {
+      if (bytesSent + chunk.length <= contentLength) {
+        res.write(chunk);
+        bytesSent += chunk.length;
+      } else {
+        const remainingBytes = contentLength - bytesSent;
+        res.write(chunk.slice(0, remainingBytes));
+        bytesSent += remainingBytes;
+        stream.destroy();
+        res.end();
+      }
+    });
+
+    stream.on('end', () => {
+      res.end();
+    });
+
+    stream.on('error', (error) => {
+      log(`💥 Streaming error: ${error.message}`);
+      res.status(500).end();
+    });
+
+    res.on('close', () => {
+      stream.destroy();
+    });
+
+    log(`📦 Streaming: ${info.videoDetails.title} | Format: ${audioFormat.container} | Range: ${start}-${end}/${contentLength}`);
   } catch (error) {
     log(`💥 Error: ${error instanceof Error ? error.message : String(error)}`);
     res.status(500).send('An error occurred while streaming the audio.');
