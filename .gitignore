@@ -3,3 +3,7 @@ bun.lockb
 dist/index.js
 cache/
 dist/
+
+# Added by cargo
+
+/target
