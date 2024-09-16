@@ -2,14 +2,14 @@ import axios from 'axios';
 import express from 'express';
 import fs from 'fs';
 import { log } from '../index';
-import { selectBestPipedInstance, getSelectedInstance } from '../piped';
+import { getSelectedInstance, selectBestPipedInstance } from '../piped';
 import { Album, Playlist, Song } from '../types/types';
-
-const router = express.Router();
-selectBestPipedInstance()
 
 const CACHE_FILE = './cache/search_cache.json';
 const SEARCH_WEIGHTS_FILE = './cache/search_weights.json';
+
+const router = express.Router();
+selectBestPipedInstance()
 
 interface SearchCacheItem {
   results: SearchResponse;
@@ -53,10 +53,12 @@ const updateSearchWeight = (query: string, selectedId: string) => {
   saveSearchWeights();
 };
 
-type FilterType = 'songs' | 'albums' | 'playlists';
+type FilterType = 'albums' | 'playlists' | 'songs';
 
 router.get('/', async (req, res) => {
-  const { filter, query } = req.query;
+  const { filter, mode, query } = req.query;
+  const isFullMode = mode !== 'minimal';
+
   if (!query || typeof query !== 'string') {
     log(`🚫 Invalid search query: ${JSON.stringify(query)}`);
     res.status(400).json({ error: 'Invalid or missing query parameter' });
@@ -84,9 +86,9 @@ router.get('/', async (req, res) => {
       results = searchCache[query].results;
       isCached = true;
     } else {
-      const searchPromises = filtersToSearch.map(f => 
+      const searchPromises = filtersToSearch.map(f =>
         axios.get(`${instance}/search`, {
-          params: { q: query, filter: filters[f], _internalType: f }
+          params: { _internalType: f, filter: filters[f], q: query }
         })
       );
 
@@ -98,7 +100,7 @@ router.get('/', async (req, res) => {
 
       const fetchPromises: Promise<void>[] = [];
 
-      rawResults.forEach(item => {
+      for (const item of rawResults) {
         let id = '';
         if (item.url) {
           if (item.url.includes('list=')) {
@@ -110,43 +112,53 @@ router.get('/', async (req, res) => {
             id = urlParts[urlParts.length - 1];
           }
         }
-        if (!id) return;
+        if (!id) continue;
 
         switch (item._internalType) {
-          case 'songs':
-            results.songs[id] = {
-              id,
-              title: item.title,
-              artist: item.uploaderName,
-              album: '',
-              cover: item.thumbnail,
-              duration: item.duration,
-            };
-            break;
           case 'albums':
             results.albums[id] = {
+              artist: item.uploaderName,
+              artistCover: "",
+              cover: item.thumbnail,
               id,
               name: item.name,
-              author: item.uploaderName,
-              cover: item.thumbnail,
               songs: [],
             };
-            fetchPromises.push(fetchSongs(instance, id, 'album', results.albums[id]));
+            if (isFullMode) {
+              fetchPromises.push(fetchSongs(instance, id, 'album', results.albums[id]));
+            }
+            fetchPromises.push(fetchAvatarUrl(instance, item.uploaderUrl, results.albums[id]));
             break;
           case 'playlists':
             results.playlists[id] = {
+              artist: item.uploaderName,
+              artistCover: item.artistCover,
+              cover: item.thumbnail,
               id,
               name: item.name,
-              author: item.uploaderName,
-              cover: item.thumbnail,
               songs: [],
             };
-            fetchPromises.push(fetchSongs(instance, id, 'playlist', results.playlists[id]));
+            if (isFullMode) {
+              fetchPromises.push(fetchSongs(instance, id, 'playlist', results.playlists[id]));
+            }
+            break;
+          case 'songs':
+            results.songs[id] = {
+              album: '',
+              artist: item.uploaderName,
+              artistCover: item.artistCover,
+              cover: item.thumbnail,
+              duration: item.duration,
+              id,
+              title: item.title,
+            };
             break;
         }
-      });
+      }
 
-      await Promise.all(fetchPromises);
+      if (isFullMode) {
+        await Promise.all(fetchPromises);
+      }
 
       if (!searchCache[query]) {
         searchCache[query] = {
@@ -164,7 +176,7 @@ router.get('/', async (req, res) => {
       searchCache[query].timestamp = Date.now();
       saveCache();
     }
-    
+
     if (filter) {
       const filteredResults = {
         albums: {},
@@ -178,9 +190,9 @@ router.get('/', async (req, res) => {
     const endTime = Date.now();
     const duration = endTime - startTime;
     if (isCached) {
-      log(`✅ Search (cached): "${query}" | Filter: ${filter || 'all'} | Duration: ${duration} ms`);
+      log(`✅ Search (cached): "${query}" | Filter: ${filter || 'all'} | Mode: ${isFullMode ? 'full' : 'minimal'} | Duration: ${duration} ms`);
     } else {
-      log(`✅ Search: "${query}" | Filters: ${filtersToSearch.join(', ')} | Duration: ${duration} ms`);
+      log(`✅ Search: "${query}" | Filters: ${filtersToSearch.join(', ')} | Mode: ${isFullMode ? 'full' : 'minimal'} | Duration: ${duration} ms`);
     }
 
     res.json(results);
@@ -191,17 +203,29 @@ router.get('/', async (req, res) => {
   }
 });
 
-async function fetchSongs(instance: string, id: string, type: 'playlist' | 'album', container: Album | Playlist) {
+async function fetchAvatarUrl(instance: string, uploaderUrl: string, album: Album) {
+  try {
+    const channelId = uploaderUrl.split('/').pop();
+    if (channelId) {
+      const response = await axios.get(`${instance}/channel/${channelId}`);
+      album.artistCover = response.data.avatarUrl;
+    }
+  } catch (error) {
+    log(`💥 Error fetching avatarUrl for album ${album.id}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function fetchSongs(instance: string, id: string, type: 'album' | 'playlist', container: Album | Playlist) {
   try {
     const response = await axios.get(`${instance}/playlists/${id}`);
     const relatedStreams = response.data.relatedStreams || [];
     container.songs = relatedStreams.map((stream: any) => ({
-      id: stream.url?.split('v=')[1] || '',
-      title: stream.title,
-      artist: stream.uploaderName,
       album: type === 'album' ? response.data.name : '',
+      artist: stream.uploaderName,
       cover: stream.thumbnail,
       duration: stream.duration,
+      id: stream.url?.split('v=')[1] || '',
+      title: stream.title,
     }));
   } catch (error) {
     log(`💥 Error fetching songs for ${type} ${id}: ${error instanceof Error ? error.message : String(error)}`);

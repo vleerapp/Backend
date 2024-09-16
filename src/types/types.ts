@@ -2,6 +2,7 @@ export interface Song {
   id: string;
   title: string;
   artist: string;
+  artistCover: string;
   album: string;
   cover: string;
   duration: number;
@@ -10,7 +11,8 @@ export interface Song {
 export interface Album {
   id: string;
   name: string;
-  author: string;
+  artist: string;
+  artistCover: string;
   cover: string;
   songs: Song[];
 }
@@ -18,7 +20,8 @@ export interface Album {
 export interface Playlist {
   id: string;
   name: string;
-  author: string;
+  artist: string;
+  artistCover: string;
   cover: string;
   songs: Song[];
 }
