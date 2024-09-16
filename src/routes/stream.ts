@@ -4,7 +4,7 @@ import { log } from '../index';
 
 const router = express.Router();
 
-const CHUNK_SIZE = 500 * 1024; // 500 KB chunks
+const CHUNK_SIZE = 1000 * 1024; // 500 KB chunks
 
 router.get('/', async (req, res) => {
   const { id, quality } = req.query;
