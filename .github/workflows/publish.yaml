@@ -2,21 +2,26 @@ name: Build and Push Docker Images
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag for Docker images'
+        default: 'latest'
+        required: true
 
 env:
-  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
   DOCKERHUB_ORGANIZATION: vleerapp
   DOCKERHUB_REPOSITORY: vleerapp/backend
-  GITHUB_REGISTRY: ghcr.io
+  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   GITHUB_IMAGE_NAME: ${{ github.repository_owner }}/backend
+  GITHUB_REGISTRY: ghcr.io
 
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,15 +32,15 @@ jobs:
       - name: Login to DockerHub
         uses: docker/login-action@v3
         with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
+          username: ${{ env.DOCKERHUB_USERNAME }}
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
+          password: ${{ secrets.GITHUB_TOKEN }}
           registry: ${{ env.GITHUB_REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push to DockerHub and GitHub Packages
         uses: docker/build-push-action@v6
@@ -43,5 +48,5 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.DOCKERHUB_REPOSITORY }}:latest
-            ${{ env.GITHUB_REGISTRY }}/${{ env.GITHUB_IMAGE_NAME }}:latest
+            ${{ env.DOCKERHUB_REPOSITORY }}:${{ github.event.inputs.version }}
+            ${{ env.GITHUB_REGISTRY }}/${{ env.GITHUB_IMAGE_NAME }}:${{ github.event.inputs.version }}
