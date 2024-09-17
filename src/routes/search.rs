@@ -3,17 +3,18 @@ use std::fs;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use actix_web::error::ErrorInternalServerError;
 use actix_web::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use actix_web::{get, post, web, Error, HttpResponse, Responder};
+use actix_web::{post, web, Error, HttpResponse, Responder};
+use chrono::Utc;
 use futures::future::try_join_all;
 use futures::lock::Mutex;
-use reqwest::header::{CONTENT_TYPE, HeaderName as ReqwestHeaderName};
+use reqwest::header::{HeaderName as ReqwestHeaderName, CONTENT_TYPE};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use chrono::Utc;
 
 use crate::piped::get_selected_instance;
 use crate::types::{Album, Playlist, Song};
@@ -37,7 +38,7 @@ struct SearchResponse {
     songs: HashMap<String, Song>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SearchCacheItem {
     results: SearchResponse,
     timestamp: i64,
@@ -70,33 +71,78 @@ fn initialize_cache() -> AppState {
 fn get_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(header::ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"));
-    headers.insert(header::ACCEPT_LANGUAGE, HeaderValue::from_static("en,de;q=0.9,de-CH;q=0.8"));
+    headers.insert(
+        header::ACCEPT_LANGUAGE,
+        HeaderValue::from_static("en,de;q=0.9,de-CH;q=0.8"),
+    );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=0"));
-    headers.insert(HeaderName::from_static("dnt"), HeaderValue::from_static("1"));
-    headers.insert(header::IF_MODIFIED_SINCE, HeaderValue::from_str(&Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string()).unwrap());
-    headers.insert(HeaderName::from_static("priority"), HeaderValue::from_static("u=0, i"));
-    headers.insert(HeaderName::from_static("sec-ch-ua"), HeaderValue::from_static("\"Chromium\";v=\"129\", \"Not=A?Brand\";v=\"8\""));
-    headers.insert(HeaderName::from_static("sec-ch-ua-mobile"), HeaderValue::from_static("?0"));
-    headers.insert(HeaderName::from_static("sec-ch-ua-platform"), HeaderValue::from_static("\"macOS\""));
-    headers.insert(HeaderName::from_static("sec-fetch-dest"), HeaderValue::from_static("document"));
-    headers.insert(HeaderName::from_static("sec-fetch-mode"), HeaderValue::from_static("navigate"));
-    headers.insert(HeaderName::from_static("sec-fetch-site"), HeaderValue::from_static("none"));
-    headers.insert(HeaderName::from_static("sec-fetch-user"), HeaderValue::from_static("?1"));
-    headers.insert(HeaderName::from_static("sec-gpc"), HeaderValue::from_static("1"));
-    headers.insert(HeaderName::from_static("upgrade-insecure-requests"), HeaderValue::from_static("1"));
-    headers.insert(header::USER_AGENT, HeaderValue::from_static(USER_AGENT_STRING));
+    headers.insert(
+        HeaderName::from_static("dnt"),
+        HeaderValue::from_static("1"),
+    );
+    headers.insert(
+        header::IF_MODIFIED_SINCE,
+        HeaderValue::from_str(&Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string()).unwrap(),
+    );
+    headers.insert(
+        HeaderName::from_static("priority"),
+        HeaderValue::from_static("u=0, i"),
+    );
+    headers.insert(
+        HeaderName::from_static("sec-ch-ua"),
+        HeaderValue::from_static("\"Chromium\";v=\"129\", \"Not=A?Brand\";v=\"8\""),
+    );
+    headers.insert(
+        HeaderName::from_static("sec-ch-ua-mobile"),
+        HeaderValue::from_static("?0"),
+    );
+    headers.insert(
+        HeaderName::from_static("sec-ch-ua-platform"),
+        HeaderValue::from_static("\"macOS\""),
+    );
+    headers.insert(
+        HeaderName::from_static("sec-fetch-dest"),
+        HeaderValue::from_static("document"),
+    );
+    headers.insert(
+        HeaderName::from_static("sec-fetch-mode"),
+        HeaderValue::from_static("navigate"),
+    );
+    headers.insert(
+        HeaderName::from_static("sec-fetch-site"),
+        HeaderValue::from_static("none"),
+    );
+    headers.insert(
+        HeaderName::from_static("sec-fetch-user"),
+        HeaderValue::from_static("?1"),
+    );
+    headers.insert(
+        HeaderName::from_static("sec-gpc"),
+        HeaderValue::from_static("1"),
+    );
+    headers.insert(
+        HeaderName::from_static("upgrade-insecure-requests"),
+        HeaderValue::from_static("1"),
+    );
+    headers.insert(
+        header::USER_AGENT,
+        HeaderValue::from_static(USER_AGENT_STRING),
+    );
     headers
 }
 
-#[get("/search")]
-async fn search_route(
+#[actix_web::get("/search")]
+pub async fn search_route(
     query: web::Query<SearchQuery>,
     data: web::Data<AppState>,
     client: web::Data<Client>,
 ) -> Result<HttpResponse, Error> {
     let instance = get_selected_instance();
     let is_full_mode = query.mode.as_deref() != Some("minimal");
-    let start_time = Utc::now().timestamp_millis();
+    let start_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
 
     let filters: HashMap<&str, &str> = [
         ("albums", "music_albums"),
@@ -118,6 +164,7 @@ async fn search_route(
         songs: HashMap::new(),
     };
 
+    // Check in-memory cache first
     let mut is_cached = false;
     {
         let cache = data.search_cache.lock().await;
@@ -130,6 +177,31 @@ async fn search_route(
             }) {
                 results = cached_item.results.clone();
                 is_cached = true;
+            }
+        }
+    }
+
+    // If not in memory, check file cache
+    if !is_cached {
+        if let Ok(file_content) = fs::read_to_string(CACHE_FILE) {
+            if let Ok(file_cache) =
+                serde_json::from_str::<HashMap<String, SearchCacheItem>>(&file_content)
+            {
+                if let Some(cached_item) = file_cache.get(&query.query) {
+                    if filters_to_search.iter().all(|&f| match f {
+                        "albums" => !cached_item.results.albums.is_empty(),
+                        "playlists" => !cached_item.results.playlists.is_empty(),
+                        "songs" => !cached_item.results.songs.is_empty(),
+                        _ => false,
+                    }) {
+                        results = cached_item.results.clone();
+                        is_cached = true;
+
+                        // Update in-memory cache
+                        let mut cache = data.search_cache.lock().await;
+                        cache.insert(query.query.clone(), cached_item.clone());
+                    }
+                }
             }
         }
     }
@@ -152,11 +224,11 @@ async fn search_route(
             .map(|&f| {
                 let url = format!("{}/search", instance);
                 let mut request = client.get(&url);
-                
+
                 for (key, value) in headers.iter() {
                     if let (Ok(header_name), Ok(header_value)) = (
                         ReqwestHeaderName::from_bytes(key.as_ref()),
-                        reqwest::header::HeaderValue::from_str(value.to_str().unwrap_or_default())
+                        reqwest::header::HeaderValue::from_str(value.to_str().unwrap_or_default()),
                     ) {
                         request = request.header(header_name, header_value);
                     }
@@ -174,62 +246,67 @@ async fn search_route(
 
         match try_join_all(search_futures).await {
             Ok(responses) => {
-                let raw_results: Vec<Value> = try_join_all(responses.into_iter().map(|response| async {
-                    let internal_type = response
-                        .url()
-                        .query_pairs()
-                        .find(|(k, _)| k == "_internalType")
-                        .map(|(_, v)| v.to_string());
-                    let content_type = response
-                        .headers()
-                        .get(CONTENT_TYPE)
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("")
-                        .to_string();
-                    let url = response.url().clone();
-                    let response_text = response
-                        .text()
-                        .await
-                        .map_err(|e| ErrorInternalServerError(e.to_string()))?;
+                let raw_results: Vec<Value> =
+                    try_join_all(responses.into_iter().map(|response| async {
+                        let internal_type = response
+                            .url()
+                            .query_pairs()
+                            .find(|(k, _)| k == "_internalType")
+                            .map(|(_, v)| v.to_string());
+                        let content_type = response
+                            .headers()
+                            .get(CONTENT_TYPE)
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("")
+                            .to_string();
+                        let url = response.url().clone();
+                        let response_text = response
+                            .text()
+                            .await
+                            .map_err(|e| ErrorInternalServerError(e.to_string()))?;
 
-                    if !content_type.starts_with("application/json") {
-                        log(&format!(
-                            "💥 Unexpected content type for \"{}\": {}. Response: {}",
-                            url, content_type, response_text
-                        ));
-                        return Ok(Vec::new());
-                    }
-
-                    serde_json::from_str::<Value>(&response_text)
-                        .map_err(|e| {
+                        if !content_type.starts_with("application/json") {
                             log(&format!(
-                                "💥 JSON parsing error for \"{}\": {}. Response: {}",
-                                query.query, e, response_text
+                                "💥 Unexpected content type for \"{}\": {}. Response: {}",
+                                url, content_type, response_text
                             ));
-                            ErrorInternalServerError("An error occurred while parsing the search results")
-                        })
-                        .and_then(|json| {
-                            json["items"]
-                                .as_array()
-                                .map(|items| {
-                                    items
-                                        .iter()
-                                        .map(|item| {
-                                            let mut item = item.clone();
-                                            if let Some(t) = &internal_type {
-                                                item["_internalType"] = json!(t);
-                                            }
-                                            item
-                                        })
-                                        .collect::<Vec<_>>()
-                                })
-                                .ok_or_else(|| ErrorInternalServerError("Invalid response structure"))
-                        })
-                }))
-                .await?
-                .into_iter()
-                .flatten()
-                .collect();
+                            return Ok(Vec::new());
+                        }
+
+                        serde_json::from_str::<Value>(&response_text)
+                            .map_err(|e| {
+                                log(&format!(
+                                    "💥 JSON parsing error for \"{}\": {}. Response: {}",
+                                    query.query, e, response_text
+                                ));
+                                ErrorInternalServerError(
+                                    "An error occurred while parsing the search results",
+                                )
+                            })
+                            .and_then(|json| {
+                                json["items"]
+                                    .as_array()
+                                    .map(|items| {
+                                        items
+                                            .iter()
+                                            .map(|item| {
+                                                let mut item = item.clone();
+                                                if let Some(t) = &internal_type {
+                                                    item["_internalType"] = json!(t);
+                                                }
+                                                item
+                                            })
+                                            .collect::<Vec<_>>()
+                                    })
+                                    .ok_or_else(|| {
+                                        ErrorInternalServerError("Invalid response structure")
+                                    })
+                            })
+                    }))
+                    .await?
+                    .into_iter()
+                    .flatten()
+                    .collect();
 
                 for item in raw_results {
                     let id = extract_id(&item["url"].as_str().unwrap_or_default());
@@ -273,7 +350,10 @@ async fn search_route(
                                     .as_str()
                                     .unwrap_or_default()
                                     .to_string(),
-                                artist_cover: item["artistCover"].as_str().unwrap_or_default().to_string(),
+                                artist_cover: item["artistCover"]
+                                    .as_str()
+                                    .unwrap_or_default()
+                                    .to_string(),
                                 cover: item["thumbnail"].as_str().unwrap_or_default().to_string(),
                                 id: id.clone(),
                                 name: item["name"].as_str().unwrap_or_default().to_string(),
@@ -299,7 +379,10 @@ async fn search_route(
                                     .as_str()
                                     .unwrap_or_default()
                                     .to_string(),
-                                artist_cover: item["artistCover"].as_str().unwrap_or_default().to_string(),
+                                artist_cover: item["artistCover"]
+                                    .as_str()
+                                    .unwrap_or_default()
+                                    .to_string(),
                                 cover: item["thumbnail"].as_str().unwrap_or_default().to_string(),
                                 duration: item["duration"].as_i64().unwrap_or_default() as i32,
                                 id: id.clone(),
@@ -329,22 +412,40 @@ async fn search_route(
                 }
 
                 for (id, uploader_url) in avatar_futures {
-                    if let Ok(avatar_url) = fetch_avatar_url(&client, &instance, &uploader_url).await {
+                    if let Ok(avatar_url) =
+                        fetch_avatar_url(&client, &instance, &uploader_url).await
+                    {
                         if let Some(album) = results.albums.get_mut(&id) {
                             album.artist_cover = avatar_url;
                         }
                     }
                 }
 
+                // Update both in-memory and file cache
                 let mut cache = data.search_cache.lock().await;
-                cache.insert(
-                    query.query.clone(),
-                    SearchCacheItem {
-                        results: results.clone(),
-                        timestamp: Utc::now().timestamp(),
-                    },
-                );
-                let _ = fs::write(CACHE_FILE, serde_json::to_string(&*cache).unwrap());
+                let cache_item = SearchCacheItem {
+                    results: results.clone(),
+                    timestamp: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64,
+                };
+                cache.insert(query.query.clone(), cache_item.clone());
+
+                // Update file cache
+                if let Ok(mut file_cache) =
+                    fs::read_to_string(CACHE_FILE)
+                        .map_err(|_| ())
+                        .and_then(|content| {
+                            serde_json::from_str::<HashMap<String, SearchCacheItem>>(&content)
+                                .map_err(|_| ())
+                        })
+                {
+                    file_cache.insert(query.query.clone(), cache_item);
+                    if let Ok(json) = serde_json::to_string(&file_cache) {
+                        let _ = fs::write(CACHE_FILE, json);
+                    }
+                }
             }
             Err(e) => {
                 log(&format!("💥 Search error for instance {}: {}", instance, e));
@@ -377,7 +478,10 @@ async fn search_route(
         results = filtered_results;
     }
 
-    let end_time = Utc::now().timestamp_millis();
+    let end_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
     let duration = end_time - start_time;
 
     if is_cached {
@@ -419,11 +523,11 @@ async fn fetch_avatar_url(
     if let Some(channel_id) = uploader_url.split('/').last() {
         let headers = get_headers();
         let mut request = client.get(&format!("{}/channel/{}", instance, channel_id));
-        
+
         for (key, value) in headers.iter() {
             if let (Ok(header_name), Ok(header_value)) = (
                 ReqwestHeaderName::from_bytes(key.as_ref()),
-                reqwest::header::HeaderValue::from_str(value.to_str().unwrap_or_default())
+                reqwest::header::HeaderValue::from_str(value.to_str().unwrap_or_default()),
             ) {
                 request = request.header(header_name, header_value);
             }
@@ -451,11 +555,11 @@ async fn fetch_songs(
 ) -> Result<Vec<Song>, Error> {
     let headers = get_headers();
     let mut request = client.get(&format!("{}/playlists/{}", instance, id));
-    
+
     for (key, value) in headers.iter() {
         if let (Ok(header_name), Ok(header_value)) = (
             ReqwestHeaderName::from_bytes(key.as_ref()),
-            reqwest::header::HeaderValue::from_str(value.to_str().unwrap_or_default())
+            reqwest::header::HeaderValue::from_str(value.to_str().unwrap_or_default()),
         ) {
             request = request.header(header_name, header_value);
         }

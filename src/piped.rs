@@ -60,9 +60,10 @@ pub async fn select_best_piped_instance() {
                         "piped.yt",
                         "private.coffee",
                         "privacydev.net",
-                        "projectsegfau.lt",
+                        "projectsegfau.lt"
                     ]
                     .contains(&instance.name.as_str())
+                    && !instance.api_url.contains("kavin.rocks")
                 })
                 .collect();
 
@@ -104,9 +105,6 @@ pub async fn select_best_piped_instance() {
         }
         Err(error) => {
             error!("💥 Error fetching Piped instances: {}", error);
-            let mut selected = SELECTED_INSTANCE.write().unwrap();
-            *selected = Some("https://pipedapi.kavin.rocks".to_string());
-            warn!("⚠️ Fallback to default Piped instance: {:?}", *selected);
         }
     }
 }
@@ -116,6 +114,6 @@ pub fn get_selected_instance() -> String {
         .read()
         .unwrap()
         .clone()
-        .unwrap_or_else(|| "https://pipedapi.kavin.rocks".to_string());
+        .unwrap().to_string();
     instance
 }
