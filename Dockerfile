@@ -1,23 +1,21 @@
-FROM oven/bun:1
+FROM rust:latest
 
 WORKDIR /usr/src/app
 
-RUN apt-get update && \
-    apt-get install -y python3-pip ffmpeg && \
-    pip3 install yt-dlp && \
-    apt-get clean
+RUN apt-get clean && \
+    apt-get update && \
+    apt-get install -y ffmpeg
 
-COPY package.json ./
+COPY Cargo.lock Cargo.toml ./
 
-RUN bun install && \
-    bun add -d typescript
+RUN cargo fetch
 
 COPY . .
 
-RUN bunx tsc
+RUN cargo build --release
 
 RUN mkdir -p /usr/src/app/cache/compressed /usr/src/app/cache/lossless
 
 EXPOSE 3000
 
-CMD ["bun", "start"]
+CMD ["./target/release/Backend"]
