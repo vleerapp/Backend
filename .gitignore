@@ -3,3 +3,5 @@ bun.lockb
 dist/index.js
 cache/
 dist/
+target/
+app.log
