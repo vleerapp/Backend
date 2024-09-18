@@ -8,3 +8,4 @@ dist/
 
 /target
 app.log
+rustypipe_cache.json

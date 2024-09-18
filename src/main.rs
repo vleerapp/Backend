@@ -1,11 +1,11 @@
 use crate::routes::search::AppState;
 use actix_cors::Cors;
-use actix_web::{http::header, web, App, HttpServer};
-use env_logger::Env;
+use actix_web::{http::header, web, App, HttpServer, middleware};
 use futures::lock::Mutex;
 use piped::select_best_piped_instance;
 use std::{collections::HashMap, sync::Arc};
 use utils::clear_log;
+use actix_web::middleware::{NormalizePath, TrailingSlash};
 
 mod piped;
 mod routes;
@@ -15,7 +15,6 @@ mod utils;
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     clear_log();
-    env_logger::init_from_env(Env::default().default_filter_or("debug"));
 
     let app_state = web::Data::new(AppState {
         search_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -32,6 +31,9 @@ async fn main() -> std::io::Result<()> {
 
         App::new()
             .wrap(cors)
+            .wrap(middleware::Logger::default())
+            .wrap(NormalizePath::new(TrailingSlash::Trim))
+            .wrap(middleware::Compress::default())
             .service(routes::download::download_route)
             .service(routes::index::index_route)
             .service(routes::search::search_route)
