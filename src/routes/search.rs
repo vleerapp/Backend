@@ -7,21 +7,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use actix_web::error::ErrorInternalServerError;
 use actix_web::http::header::{self, HeaderMap, HeaderName, HeaderValue};
-use actix_web::{post, web, Error, HttpResponse, Responder};
+use actix_web::{get, post, web, Error, HttpResponse, Responder};
 use chrono::Utc;
 use futures::future::try_join_all;
-use futures::lock::Mutex;
 use reqwest::header::{HeaderName as ReqwestHeaderName, CONTENT_TYPE};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
 
 use crate::piped::get_selected_instance;
 use crate::types::{Album, Playlist, Song};
 use crate::utils::log;
 
-const CACHE_FILE: &str = "./cache/search_cache.json";
-const SEARCH_WEIGHTS_FILE: &str = "./cache/search_weights.json";
+pub const CACHE_FILE: &str = "./cache/search_cache.json";
+pub const SEARCH_WEIGHTS_FILE: &str = "./cache/search_weights.json";
 const USER_AGENT_STRING: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
 
 #[derive(Deserialize)]
@@ -33,9 +33,9 @@ struct SearchQuery {
 
 #[derive(Serialize, Deserialize, Clone)]
 struct SearchResponse {
-    albums: HashMap<String, Album>,
-    playlists: HashMap<String, Playlist>,
-    songs: HashMap<String, Song>,
+    albums: Vec<Album>,
+    playlists: Vec<Playlist>,
+    songs: Vec<Song>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -47,25 +47,6 @@ pub struct SearchCacheItem {
 pub struct AppState {
     pub search_cache: Arc<Mutex<HashMap<String, SearchCacheItem>>>,
     pub search_weights: Arc<Mutex<HashMap<String, HashMap<String, u32>>>>,
-}
-
-fn initialize_cache() -> AppState {
-    let search_cache = if let Ok(content) = fs::read_to_string(CACHE_FILE) {
-        serde_json::from_str(&content).unwrap_or_default()
-    } else {
-        HashMap::new()
-    };
-
-    let search_weights = if let Ok(content) = fs::read_to_string(SEARCH_WEIGHTS_FILE) {
-        serde_json::from_str(&content).unwrap_or_default()
-    } else {
-        HashMap::new()
-    };
-
-    AppState {
-        search_cache: Arc::new(Mutex::new(search_cache)),
-        search_weights: Arc::new(Mutex::new(search_weights)),
-    }
 }
 
 fn get_headers() -> HeaderMap {
@@ -131,13 +112,18 @@ fn get_headers() -> HeaderMap {
     headers
 }
 
-#[actix_web::get("/search")]
+#[get("/search")]
 pub async fn search_route(
     query: web::Query<SearchQuery>,
     data: web::Data<AppState>,
     client: web::Data<Client>,
 ) -> Result<HttpResponse, Error> {
-    let instance = get_selected_instance();
+    let search_cache = &data.search_cache;
+    let search_weights = &data.search_weights;
+
+    let instance = get_selected_instance().ok_or_else(|| {
+        ErrorInternalServerError("No Piped instance selected")
+    })?;
     let is_full_mode = query.mode.as_deref() != Some("minimal");
     let start_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -159,15 +145,14 @@ pub async fn search_route(
     };
 
     let mut results = SearchResponse {
-        albums: HashMap::new(),
-        playlists: HashMap::new(),
-        songs: HashMap::new(),
+        albums: Vec::new(),
+        playlists: Vec::new(),
+        songs: Vec::new(),
     };
 
-    // Check in-memory cache first
     let mut is_cached = false;
     {
-        let cache = data.search_cache.lock().await;
+        let cache = search_cache.lock().await;
         if let Some(cached_item) = cache.get(&query.query) {
             if filters_to_search.iter().all(|&f| match f {
                 "albums" => !cached_item.results.albums.is_empty(),
@@ -177,31 +162,6 @@ pub async fn search_route(
             }) {
                 results = cached_item.results.clone();
                 is_cached = true;
-            }
-        }
-    }
-
-    // If not in memory, check file cache
-    if !is_cached {
-        if let Ok(file_content) = fs::read_to_string(CACHE_FILE) {
-            if let Ok(file_cache) =
-                serde_json::from_str::<HashMap<String, SearchCacheItem>>(&file_content)
-            {
-                if let Some(cached_item) = file_cache.get(&query.query) {
-                    if filters_to_search.iter().all(|&f| match f {
-                        "albums" => !cached_item.results.albums.is_empty(),
-                        "playlists" => !cached_item.results.playlists.is_empty(),
-                        "songs" => !cached_item.results.songs.is_empty(),
-                        _ => false,
-                    }) {
-                        results = cached_item.results.clone();
-                        is_cached = true;
-
-                        // Update in-memory cache
-                        let mut cache = data.search_cache.lock().await;
-                        cache.insert(query.query.clone(), cached_item.clone());
-                    }
-                }
             }
         }
     }
@@ -327,7 +287,7 @@ pub async fn search_route(
                                 name: item["name"].as_str().unwrap_or_default().to_string(),
                                 songs: Vec::new(),
                             };
-                            results.albums.insert(id.clone(), album);
+                            results.albums.push(album);
                             if is_full_mode {
                                 let client = client.clone();
                                 let instance = instance.clone();
@@ -359,7 +319,7 @@ pub async fn search_route(
                                 name: item["name"].as_str().unwrap_or_default().to_string(),
                                 songs: Vec::new(),
                             };
-                            results.playlists.insert(id.clone(), playlist);
+                            results.playlists.push(playlist);
                             if is_full_mode {
                                 let client = client.clone();
                                 let instance = instance.clone();
@@ -388,7 +348,7 @@ pub async fn search_route(
                                 id: id.clone(),
                                 title: item["title"].as_str().unwrap_or_default().to_string(),
                             };
-                            results.songs.insert(id, song);
+                            results.songs.push(song);
                         }
                         _ => {}
                     }
@@ -397,14 +357,14 @@ pub async fn search_route(
                 if is_full_mode {
                     for (id, future) in album_futures {
                         if let Ok(songs) = future.await {
-                            if let Some(album) = results.albums.get_mut(&id) {
+                            if let Some(album) = results.albums.iter_mut().find(|a| a.id == id) {
                                 album.songs = songs;
                             }
                         }
                     }
                     for (id, future) in playlist_futures {
                         if let Ok(songs) = future.await {
-                            if let Some(playlist) = results.playlists.get_mut(&id) {
+                            if let Some(playlist) = results.playlists.iter_mut().find(|p| p.id == id) {
                                 playlist.songs = songs;
                             }
                         }
@@ -415,14 +375,13 @@ pub async fn search_route(
                     if let Ok(avatar_url) =
                         fetch_avatar_url(&client, &instance, &uploader_url).await
                     {
-                        if let Some(album) = results.albums.get_mut(&id) {
+                        if let Some(album) = results.albums.iter_mut().find(|a| a.id == id) {
                             album.artist_cover = avatar_url;
                         }
                     }
                 }
 
-                // Update both in-memory and file cache
-                let mut cache = data.search_cache.lock().await;
+                // Update file cache
                 let cache_item = SearchCacheItem {
                     results: results.clone(),
                     timestamp: SystemTime::now()
@@ -430,21 +389,11 @@ pub async fn search_route(
                         .unwrap()
                         .as_secs() as i64,
                 };
-                cache.insert(query.query.clone(), cache_item.clone());
 
-                // Update file cache
-                if let Ok(mut file_cache) =
-                    fs::read_to_string(CACHE_FILE)
-                        .map_err(|_| ())
-                        .and_then(|content| {
-                            serde_json::from_str::<HashMap<String, SearchCacheItem>>(&content)
-                                .map_err(|_| ())
-                        })
-                {
-                    file_cache.insert(query.query.clone(), cache_item);
-                    if let Ok(json) = serde_json::to_string(&file_cache) {
-                        let _ = fs::write(CACHE_FILE, json);
-                    }
+                let mut cache = search_cache.lock().await;
+                cache.insert(query.query.clone(), cache_item);
+                if let Ok(json) = serde_json::to_string(&*cache) {
+                    let _ = fs::write(CACHE_FILE, json);
                 }
             }
             Err(e) => {
@@ -457,23 +406,25 @@ pub async fn search_route(
         }
     }
 
+    // Get the weights for the current query
+    let weights = if let Ok(weights_content) = fs::read_to_string(SEARCH_WEIGHTS_FILE) {
+        serde_json::from_str::<HashMap<String, HashMap<String, u32>>>(&weights_content)
+            .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+    let query_weights = weights.get(&query.query).cloned().unwrap_or_default();
+
+    // Sort and weight the results
+    results.albums = sort_and_weight(results.albums, &query_weights);
+    results.playlists = sort_and_weight(results.playlists, &query_weights);
+    results.songs = sort_and_weight(results.songs, &query_weights);
+
     if let Some(filter) = &query.filter {
         let filtered_results = SearchResponse {
-            albums: if filter == "albums" {
-                results.albums
-            } else {
-                HashMap::new()
-            },
-            playlists: if filter == "playlists" {
-                results.playlists
-            } else {
-                HashMap::new()
-            },
-            songs: if filter == "songs" {
-                results.songs
-            } else {
-                HashMap::new()
-            },
+            albums: if filter == "albums" { results.albums } else { Vec::new() },
+            playlists: if filter == "playlists" { results.playlists } else { Vec::new() },
+            songs: if filter == "songs" { results.songs } else { Vec::new() },
         };
         results = filtered_results;
     }
@@ -601,6 +552,22 @@ async fn fetch_songs(
     }
 }
 
+fn sort_and_weight<T: Clone + Serialize>(
+    mut items: Vec<T>,
+    weights: &HashMap<String, u32>,
+) -> Vec<T> {
+    items.sort_by(|a, b| {
+        let a_value = serde_json::to_value(a).unwrap();
+        let b_value = serde_json::to_value(b).unwrap();
+        let a_id = a_value["id"].as_str().unwrap_or("");
+        let b_id = b_value["id"].as_str().unwrap_or("");
+        let a_weight = weights.get(a_id).cloned().unwrap_or(0);
+        let b_weight = weights.get(b_id).cloned().unwrap_or(0);
+        b_weight.cmp(&a_weight).then_with(|| a_id.cmp(b_id))
+    });
+    items
+}
+
 #[derive(Deserialize)]
 struct UpdateWeightRequest {
     query: String,
@@ -608,11 +575,12 @@ struct UpdateWeightRequest {
 }
 
 #[post("/search/update-weight")]
-async fn update_weight_route(
-    req: web::Json<UpdateWeightRequest>,
+pub async fn update_weight_route(
+    req: web::Query<UpdateWeightRequest>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    let mut weights = data.search_weights.lock().await;
+    let search_weights = &data.search_weights;
+    let mut weights = search_weights.lock().await;
     let query_weights = weights
         .entry(req.query.clone())
         .or_insert_with(HashMap::new);
@@ -626,11 +594,6 @@ async fn update_weight_route(
 }
 
 pub fn config(cfg: &mut web::ServiceConfig) {
-    let app_state = web::Data::new(initialize_cache());
-    let client = Client::new();
-
-    cfg.app_data(app_state.clone())
-        .app_data(web::Data::new(client))
-        .service(search_route)
-        .service(update_weight_route);
+    cfg.service(search_route)
+       .service(update_weight_route);
 }
