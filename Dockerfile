@@ -22,25 +22,28 @@ RUN case "$TARGETARCH" in \
     esac
 
 ENV PKG_CONFIG_ALLOW_CROSS=1
-ENV OPENSSL_DIR=/usr/include/openssl
-ENV OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
-ENV OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu
 
-RUN rustup target add $(cat /tmp/target) && \
-    if [ "$TARGETARCH" = "arm64" ]; then \
-        export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc; \
-        export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc; \
-        export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++; \
+RUN rustup target add $(cat /tmp/target)
+
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc && \
+        export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc && \
+        export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ && \
+        export OPENSSL_DIR=/usr/include/aarch64-linux-gnu && \
+        export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu && \
+        export OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu; \
+    else \
+        export OPENSSL_DIR=/usr/include && \
+        export OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu && \
+        export OPENSSL_INCLUDE_DIR=/usr/include; \
     fi && \
     cargo build --release --target $(cat /tmp/target) && \
-    mv target/$(cat /tmp/target)/release/backend . && \
-    rm -rf target && \
-    rm -rf src Cargo.toml Cargo.lock .git .gitignore
+    mv target/$(cat /tmp/target)/release/backend .
 
 FROM --platform=$TARGETPLATFORM debian:bullseye-slim
 
 RUN apt-get update && \
-    apt-get install -y ffmpeg && \
+    apt-get install -y ffmpeg libssl-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
