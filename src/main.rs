@@ -5,7 +5,7 @@ use reqwest::Client;
 use utils::clear_log;
 use actix_web::middleware::{NormalizePath, TrailingSlash};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use std::collections::HashMap;
 use crate::routes::search::{SearchCacheItem, CACHE_FILE, SEARCH_WEIGHTS_FILE, AppState};
 
@@ -30,11 +30,14 @@ async fn main() -> std::io::Result<()> {
             .unwrap_or_default()
     ));
 
+    let search_cancel = Arc::new(Notify::new());
+
     let client = Client::new();
 
     let app_state = web::Data::new(AppState {
         search_cache: search_cache.clone(),
         search_weights: search_weights.clone(),
+        search_cancel: search_cancel.clone(),
     });
 
     let server = HttpServer::new(move || {
@@ -59,7 +62,7 @@ async fn main() -> std::io::Result<()> {
             .service(routes::thumbnail::thumbnail_route)
             .configure(routes::search::config)
     })
-    .bind(("0.0.0.0", 3000))?;
+    .bind(("0.0.0.0", 3001))?;
 
     select_best_piped_instance().await;
 

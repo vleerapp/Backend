@@ -9,12 +9,13 @@ use actix_web::error::ErrorInternalServerError;
 use actix_web::http::header::{self, HeaderMap, HeaderName, HeaderValue};
 use actix_web::{get, post, web, Error, HttpResponse, Responder};
 use chrono::Utc;
+use futures::future::Either;
 use futures::future::try_join_all;
 use reqwest::header::{HeaderName as ReqwestHeaderName, CONTENT_TYPE};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 use crate::piped::get_selected_instance;
 use crate::types::{Album, Playlist, Song};
@@ -47,6 +48,7 @@ pub struct SearchCacheItem {
 pub struct AppState {
     pub search_cache: Arc<Mutex<HashMap<String, SearchCacheItem>>>,
     pub search_weights: Arc<Mutex<HashMap<String, HashMap<String, u32>>>>,
+    pub search_cancel: Arc<Notify>,
 }
 
 fn get_headers() -> HeaderMap {
@@ -119,6 +121,7 @@ pub async fn search_route(
     client: web::Data<Client>,
 ) -> Result<HttpResponse, Error> {
     let search_cache = &data.search_cache;
+    let search_cancel = &data.search_cancel;
 
     let instance = get_selected_instance().ok_or_else(|| {
         ErrorInternalServerError("No Piped instance selected")
@@ -166,246 +169,262 @@ pub async fn search_route(
     }
 
     if !is_cached {
-        let mut album_futures: Vec<(
-            String,
-            Pin<Box<dyn Future<Output = Result<Vec<Song>, Error>> + Send>>,
-        )> = Vec::new();
-        let mut playlist_futures: Vec<(
-            String,
-            Pin<Box<dyn Future<Output = Result<Vec<Song>, Error>> + Send>>,
-        )> = Vec::new();
-        let mut avatar_futures: Vec<(String, String)> = Vec::new();
+        search_cancel.notify_waiters();
 
-        let headers = get_headers();
+        let search_future = async {
+            let mut album_futures: Vec<(
+                String,
+                Pin<Box<dyn Future<Output = Result<Vec<Song>, Error>> + Send>>,
+            )> = Vec::new();
+            let mut playlist_futures: Vec<(
+                String,
+                Pin<Box<dyn Future<Output = Result<Vec<Song>, Error>> + Send>>,
+            )> = Vec::new();
+            let mut avatar_futures: Vec<(String, String)> = Vec::new();
 
-        let search_futures: Vec<_> = filters_to_search
-            .iter()
-            .map(|&f| {
-                let url = format!("{}/search", instance);
-                let mut request = client.get(&url);
+            let headers = get_headers();
 
-                for (key, value) in headers.iter() {
-                    if let (Ok(header_name), Ok(header_value)) = (
-                        ReqwestHeaderName::from_bytes(key.as_ref()),
-                        reqwest::header::HeaderValue::from_str(value.to_str().unwrap_or_default()),
-                    ) {
-                        request = request.header(header_name, header_value);
-                    }
-                }
+            let search_futures: Vec<_> = filters_to_search
+                .iter()
+                .map(|&f| {
+                    let url = format!("{}/search", instance);
+                    let mut request = client.get(&url);
 
-                request
-                    .query(&[
-                        ("_internalType", f),
-                        ("filter", filters[f]),
-                        ("q", &query.query),
-                    ])
-                    .send()
-            })
-            .collect();
-
-        match try_join_all(search_futures).await {
-            Ok(responses) => {
-                let raw_results: Vec<Value> =
-                    try_join_all(responses.into_iter().map(|response| async {
-                        let internal_type = response
-                            .url()
-                            .query_pairs()
-                            .find(|(k, _)| k == "_internalType")
-                            .map(|(_, v)| v.to_string());
-                        let content_type = response
-                            .headers()
-                            .get(CONTENT_TYPE)
-                            .and_then(|v| v.to_str().ok())
-                            .unwrap_or("")
-                            .to_string();
-                        let url = response.url().clone();
-                        let response_text = response
-                            .text()
-                            .await
-                            .map_err(|e| ErrorInternalServerError(e.to_string()))?;
-
-                        if !content_type.starts_with("application/json") {
-                            log(&format!(
-                                "💥 Unexpected content type for \"{}\": {}. Response: {}",
-                                url, content_type, response_text
-                            ));
-                            return Ok(Vec::new());
+                    for (key, value) in headers.iter() {
+                        if let (Ok(header_name), Ok(header_value)) = (
+                            ReqwestHeaderName::from_bytes(key.as_ref()),
+                            reqwest::header::HeaderValue::from_str(value.to_str().unwrap_or_default()),
+                        ) {
+                            request = request.header(header_name, header_value);
                         }
+                    }
 
-                        serde_json::from_str::<Value>(&response_text)
-                            .map_err(|e| {
+                    request
+                        .query(&[
+                            ("_internalType", f),
+                            ("filter", filters[f]),
+                            ("q", &query.query),
+                        ])
+                        .send()
+                })
+                .collect();
+
+            match try_join_all(search_futures).await {
+                Ok(responses) => {
+                    let raw_results: Vec<Value> =
+                        try_join_all(responses.into_iter().map(|response| async {
+                            let internal_type = response
+                                .url()
+                                .query_pairs()
+                                .find(|(k, _)| k == "_internalType")
+                                .map(|(_, v)| v.to_string());
+                            let content_type = response
+                                .headers()
+                                .get(CONTENT_TYPE)
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            let url = response.url().clone();
+                            let response_text = response
+                                .text()
+                                .await
+                                .map_err(|e| ErrorInternalServerError(e.to_string()))?;
+
+                            if !content_type.starts_with("application/json") {
                                 log(&format!(
-                                    "💥 JSON parsing error for \"{}\": {}. Response: {}",
-                                    query.query, e, response_text
+                                    "💥 Unexpected content type for \"{}\": {}. Response: {}",
+                                    url, content_type, response_text
                                 ));
-                                ErrorInternalServerError(
-                                    "An error occurred while parsing the search results",
-                                )
-                            })
-                            .and_then(|json| {
-                                json["items"]
-                                    .as_array()
-                                    .map(|items| {
-                                        items
-                                            .iter()
-                                            .map(|item| {
-                                                let mut item = item.clone();
-                                                if let Some(t) = &internal_type {
-                                                    item["_internalType"] = json!(t);
-                                                }
-                                                item
-                                            })
-                                            .collect::<Vec<_>>()
-                                    })
-                                    .ok_or_else(|| {
-                                        ErrorInternalServerError("Invalid response structure")
-                                    })
-                            })
-                    }))
-                    .await?
-                    .into_iter()
-                    .flatten()
-                    .collect();
+                                return Ok(Vec::new());
+                            }
 
-                for item in raw_results {
-                    let id = extract_id(&item["url"].as_str().unwrap_or_default());
-                    if id.is_empty() {
-                        continue;
-                    }
+                            serde_json::from_str::<Value>(&response_text)
+                                .map_err(|e| {
+                                    log(&format!(
+                                        "💥 JSON parsing error for \"{}\": {}. Response: {}",
+                                        query.query, e, response_text
+                                    ));
+                                    ErrorInternalServerError(
+                                        "An error occurred while parsing the search results",
+                                    )
+                                })
+                                .and_then(|json| {
+                                    json["items"]
+                                        .as_array()
+                                        .map(|items| {
+                                            items
+                                                .iter()
+                                                .map(|item| {
+                                                    let mut item = item.clone();
+                                                    if let Some(t) = &internal_type {
+                                                        item["_internalType"] = json!(t);
+                                                    }
+                                                    item
+                                                })
+                                                .collect::<Vec<_>>()
+                                        })
+                                        .ok_or_else(|| {
+                                            ErrorInternalServerError("Invalid response structure")
+                                        })
+                                })
+                        }))
+                        .await?
+                        .into_iter()
+                        .flatten()
+                        .collect();
 
-                    match item["_internalType"].as_str() {
-                        Some("albums") => {
-                            let album = Album {
-                                artist: item["uploaderName"]
-                                    .as_str()
-                                    .unwrap_or_default()
-                                    .to_string(),
-                                artist_cover: String::new(),
-                                cover: item["thumbnail"].as_str().unwrap_or_default().to_string(),
-                                id: id.clone(),
-                                name: item["name"].as_str().unwrap_or_default().to_string(),
-                                songs: Vec::new(),
-                            };
-                            results.albums.push(album);
-                            if is_full_mode {
-                                let client = client.clone();
-                                let instance = instance.clone();
-                                let id_clone = id.clone();
-                                album_futures.push((
+                    for item in raw_results {
+                        let id = extract_id(&item["url"].as_str().unwrap_or_default());
+                        if id.is_empty() {
+                            continue;
+                        }
+
+                        match item["_internalType"].as_str() {
+                            Some("albums") => {
+                                let album = Album {
+                                    artist: item["uploaderName"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    artist_cover: String::new(),
+                                    cover: item["thumbnail"].as_str().unwrap_or_default().to_string(),
+                                    id: id.clone(),
+                                    name: item["name"].as_str().unwrap_or_default().to_string(),
+                                    songs: Vec::new(),
+                                };
+                                results.albums.push(album);
+                                if is_full_mode {
+                                    let client = client.clone();
+                                    let instance = instance.clone();
+                                    let id_clone = id.clone();
+                                    album_futures.push((
+                                        id.clone(),
+                                        Box::pin(async move {
+                                            fetch_songs(&client, &instance, &id_clone, "album").await
+                                        }),
+                                    ));
+                                }
+                                avatar_futures.push((
                                     id.clone(),
-                                    Box::pin(async move {
-                                        fetch_songs(&client, &instance, &id_clone, "album").await
-                                    }),
+                                    item["uploaderUrl"].as_str().unwrap_or_default().to_string(),
                                 ));
                             }
-                            avatar_futures.push((
-                                id.clone(),
-                                item["uploaderUrl"].as_str().unwrap_or_default().to_string(),
-                            ));
+                            Some("playlists") => {
+                                let playlist = Playlist {
+                                    artist: item["uploaderName"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    artist_cover: item["artistCover"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    cover: item["thumbnail"].as_str().unwrap_or_default().to_string(),
+                                    id: id.clone(),
+                                    name: item["name"].as_str().unwrap_or_default().to_string(),
+                                    songs: Vec::new(),
+                                };
+                                results.playlists.push(playlist);
+                                if is_full_mode {
+                                    let client = client.clone();
+                                    let instance = instance.clone();
+                                    let id_clone = id.clone();
+                                    playlist_futures.push((
+                                        id.clone(),
+                                        Box::pin(async move {
+                                            fetch_songs(&client, &instance, &id_clone, "playlist").await
+                                        }),
+                                    ));
+                                }
+                            }
+                            Some("songs") => {
+                                let song = Song {
+                                    album: String::new(),
+                                    artist: item["uploaderName"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    artist_cover: item["artistCover"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    cover: item["thumbnail"].as_str().unwrap_or_default().to_string(),
+                                    duration: item["duration"].as_i64().unwrap_or_default() as i32,
+                                    id: id.clone(),
+                                    title: item["title"].as_str().unwrap_or_default().to_string(),
+                                };
+                                results.songs.push(song);
+                            }
+                            _ => {}
                         }
-                        Some("playlists") => {
-                            let playlist = Playlist {
-                                artist: item["uploaderName"]
-                                    .as_str()
-                                    .unwrap_or_default()
-                                    .to_string(),
-                                artist_cover: item["artistCover"]
-                                    .as_str()
-                                    .unwrap_or_default()
-                                    .to_string(),
-                                cover: item["thumbnail"].as_str().unwrap_or_default().to_string(),
-                                id: id.clone(),
-                                name: item["name"].as_str().unwrap_or_default().to_string(),
-                                songs: Vec::new(),
-                            };
-                            results.playlists.push(playlist);
-                            if is_full_mode {
-                                let client = client.clone();
-                                let instance = instance.clone();
-                                let id_clone = id.clone();
-                                playlist_futures.push((
-                                    id.clone(),
-                                    Box::pin(async move {
-                                        fetch_songs(&client, &instance, &id_clone, "playlist").await
-                                    }),
-                                ));
+                    }
+
+                    if is_full_mode {
+                        for (id, future) in album_futures {
+                            if let Ok(songs) = future.await {
+                                if let Some(album) = results.albums.iter_mut().find(|a| a.id == id) {
+                                    album.songs = songs;
+                                }
                             }
                         }
-                        Some("songs") => {
-                            let song = Song {
-                                album: String::new(),
-                                artist: item["uploaderName"]
-                                    .as_str()
-                                    .unwrap_or_default()
-                                    .to_string(),
-                                artist_cover: item["artistCover"]
-                                    .as_str()
-                                    .unwrap_or_default()
-                                    .to_string(),
-                                cover: item["thumbnail"].as_str().unwrap_or_default().to_string(),
-                                duration: item["duration"].as_i64().unwrap_or_default() as i32,
-                                id: id.clone(),
-                                title: item["title"].as_str().unwrap_or_default().to_string(),
-                            };
-                            results.songs.push(song);
+                        for (id, future) in playlist_futures {
+                            if let Ok(songs) = future.await {
+                                if let Some(playlist) = results.playlists.iter_mut().find(|p| p.id == id) {
+                                    playlist.songs = songs;
+                                }
+                            }
                         }
-                        _ => {}
                     }
-                }
 
-                if is_full_mode {
-                    for (id, future) in album_futures {
-                        if let Ok(songs) = future.await {
+                    for (id, uploader_url) in avatar_futures {
+                        if let Ok(avatar_url) =
+                            fetch_avatar_url(&client, &instance, &uploader_url).await
+                        {
                             if let Some(album) = results.albums.iter_mut().find(|a| a.id == id) {
-                                album.songs = songs;
+                                album.artist_cover = avatar_url;
                             }
                         }
                     }
-                    for (id, future) in playlist_futures {
-                        if let Ok(songs) = future.await {
-                            if let Some(playlist) = results.playlists.iter_mut().find(|p| p.id == id) {
-                                playlist.songs = songs;
-                            }
-                        }
+
+                    let cache_item = SearchCacheItem {
+                        results: results.clone(),
+                        timestamp: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs() as i64,
+                    };
+
+                    let mut cache = search_cache.lock().await;
+                    cache.insert(query.query.clone(), cache_item);
+                    if let Ok(json) = serde_json::to_string(&*cache) {
+                        let _ = fs::write(CACHE_FILE, json);
                     }
+
+                    Ok(results)
                 }
-
-                for (id, uploader_url) in avatar_futures {
-                    if let Ok(avatar_url) =
-                        fetch_avatar_url(&client, &instance, &uploader_url).await
-                    {
-                        if let Some(album) = results.albums.iter_mut().find(|a| a.id == id) {
-                            album.artist_cover = avatar_url;
-                        }
-                    }
-                }
-
-                // Update file cache
-                let cache_item = SearchCacheItem {
-                    results: results.clone(),
-                    timestamp: SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs() as i64,
-                };
-
-                let mut cache = search_cache.lock().await;
-                cache.insert(query.query.clone(), cache_item);
-                if let Ok(json) = serde_json::to_string(&*cache) {
-                    let _ = fs::write(CACHE_FILE, json);
+                Err(e) => {
+                    log(&format!("💥 Search error for instance {}: {}", instance, e));
+                    Err(ErrorInternalServerError(format!("Failed to perform search: {}", e)))
                 }
             }
-            Err(e) => {
-                log(&format!("💥 Search error for instance {}: {}", instance, e));
-                return Ok(HttpResponse::InternalServerError().json(json!({
-                    "error": "Failed to perform search",
-                    "message": e.to_string()
+        };
+
+        let search_future = Box::pin(search_future);
+        let cancel_future = Box::pin(search_cancel.notified());
+
+        match futures::future::select(search_future, cancel_future).await {
+            Either::Left((result, _)) => {
+                results = result?;
+            }
+            Either::Right(_) => {
+                return Ok(HttpResponse::Ok().json(json!({
+                    "error": "Search cancelled",
+                    "message": "A new search request was initiated"
                 })));
             }
         }
     }
 
-    // Get the weights for the current query
     let weights = if let Ok(weights_content) = fs::read_to_string(SEARCH_WEIGHTS_FILE) {
         serde_json::from_str::<HashMap<String, HashMap<String, u32>>>(&weights_content)
             .unwrap_or_default()
@@ -414,7 +433,6 @@ pub async fn search_route(
     };
     let query_weights = weights.get(&query.query).cloned().unwrap_or_default();
 
-    // Sort and weight the results
     results.albums = sort_and_weight(results.albums, &query_weights);
     results.playlists = sort_and_weight(results.playlists, &query_weights);
     results.songs = sort_and_weight(results.songs, &query_weights);
