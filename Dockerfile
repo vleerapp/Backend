@@ -1,56 +1,31 @@
-FROM --platform=$BUILDPLATFORM rust:latest AS builder
-
+FROM --platform=$BUILDPLATFORM rust:latest AS builder-base
 RUN apt-get update && \
-    apt-get install -y \
-    ffmpeg \
-    pkg-config \
-    libssl-dev \
-    gcc-aarch64-linux-gnu \
-    libc6-dev-arm64-cross && \
+    apt-get install -y ffmpeg pkg-config libssl-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
-
 COPY . .
 
-ARG TARGETARCH
-RUN case "$TARGETARCH" in \
-        "amd64") echo "x86_64-unknown-linux-gnu" > /tmp/target ;; \
-        "arm64") echo "aarch64-unknown-linux-gnu" > /tmp/target ;; \
-        *) echo "Unsupported architecture: $TARGETARCH" && exit 1 ;; \
-    esac
+FROM builder-base AS builder-amd64
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+RUN rustup target add x86_64-unknown-linux-gnu && \
+    cargo build --release --target x86_64-unknown-linux-gnu && \
+    mv target/x86_64-unknown-linux-gnu/release/backend /app/backend
 
-ENV PKG_CONFIG_ALLOW_CROSS=1
+FROM builder-base AS builder-arm64
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+RUN apt-get update && \
+    apt-get install -y gcc-aarch64-linux-gnu && \
+    rustup target add aarch64-unknown-linux-gnu && \
+    cargo build --release --target aarch64-unknown-linux-gnu && \
+    mv target/aarch64-unknown-linux-gnu/release/backend /app/backend
 
-RUN rustup target add $(cat /tmp/target)
-
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-        export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc && \
-        export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc && \
-        export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ && \
-        export OPENSSL_DIR=/usr/include/aarch64-linux-gnu && \
-        export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu && \
-        export OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu; \
-    else \
-        export OPENSSL_DIR=/usr/include && \
-        export OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu && \
-        export OPENSSL_INCLUDE_DIR=/usr/include; \
-    fi && \
-    cargo build --release --target $(cat /tmp/target) && \
-    mv target/$(cat /tmp/target)/release/backend .
-
-FROM --platform=$TARGETPLATFORM debian:bullseye-slim
-
+FROM --platform=$TARGETPLATFORM debian:bullseye-slim AS runtime
 RUN apt-get update && \
     apt-get install -y ffmpeg libssl-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
-
-COPY --from=builder /app/backend .
-
+COPY --from=builder-${TARGETARCH} /app/backend .
 EXPOSE 3000
-
 CMD ["./backend"]
