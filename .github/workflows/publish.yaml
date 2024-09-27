@@ -21,19 +21,10 @@ jobs:
     permissions:
       contents: read
       packages: write
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Install Docker
-        run: |
-          brew install docker colima
-          colima start
-
-      - name: Check Docker service
-        run: |
-          docker info
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
