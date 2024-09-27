@@ -28,7 +28,7 @@ jobs:
 
       - name: Install Docker
         run: |
-          brew install docker
+          brew install docker colima
           colima start
 
       - name: Check Docker service
