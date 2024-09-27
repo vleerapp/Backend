@@ -20,12 +20,19 @@ RUN apt-get update && \
     cargo build --release --target aarch64-unknown-linux-gnu && \
     mv target/aarch64-unknown-linux-gnu/release/backend /app/backend
 
-FROM --platform=$TARGETPLATFORM debian:bullseye-slim AS runtime
+FROM debian:bullseye-slim AS runtime
 RUN apt-get update && \
     apt-get install -y ffmpeg libssl-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=builder-${TARGETARCH} /app/backend .
+
+FROM runtime AS runtime-amd64
+COPY --from=builder-amd64 /app/backend .
+
+FROM runtime AS runtime-arm64
+COPY --from=builder-arm64 /app/backend .
+
+FROM runtime-$TARGETARCH
 EXPOSE 3000
 CMD ["./backend"]
