@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag for Docker images'
         default: 'latest'
+        description: 'Version tag for Docker images'
         required: true
 
 env:
@@ -25,6 +25,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Check Docker service
+        run: |
+          docker info
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
