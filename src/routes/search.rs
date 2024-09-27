@@ -119,7 +119,6 @@ pub async fn search_route(
     client: web::Data<Client>,
 ) -> Result<HttpResponse, Error> {
     let search_cache = &data.search_cache;
-    let search_weights = &data.search_weights;
 
     let instance = get_selected_instance().ok_or_else(|| {
         ErrorInternalServerError("No Piped instance selected")
