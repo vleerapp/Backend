@@ -20,9 +20,9 @@ RUN apt-get update && \
     cargo build --release --target aarch64-unknown-linux-gnu && \
     mv target/aarch64-unknown-linux-gnu/release/backend /app/backend
 
-FROM debian:bullseye-slim AS runtime
+FROM ubuntu:22.04 AS runtime
 RUN apt-get update && \
-    apt-get install -y ffmpeg libssl-dev && \
+    apt-get install -y ffmpeg libssl3 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /app
