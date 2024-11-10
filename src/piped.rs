@@ -1,19 +1,18 @@
 use futures::future::join_all;
-use log::{error, info, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Serialize, Deserialize)]
-struct PipedInstance {
-    api_url: String,
-    name: String,
+pub struct PipedInstance {
+    pub api_url: String,
+    pub name: String,
 }
 
 static SELECTED_INSTANCE: RwLock<Option<String>> = RwLock::new(None);
 
-async fn ping_instance(client: &Client, instance: &PipedInstance) -> Duration {
+async fn ping_instance(client: &Client, instance: &PipedInstance) -> Option<Duration> {
     let start = Instant::now();
     match client
         .get(&format!("{}/healthcheck", instance.api_url))
@@ -21,106 +20,130 @@ async fn ping_instance(client: &Client, instance: &PipedInstance) -> Duration {
         .send()
         .await
     {
-        Ok(_response) => start.elapsed(),
-        Err(e) => {
-            warn!("Failed to ping {}: {}", instance.name, e);
-            Duration::from_secs(u64::MAX)
+        Ok(_response) => {
+            let duration = start.elapsed();
+            Some(duration)
+        }
+        Err(_) => {
+            None
         }
     }
 }
 
+async fn ping_instance_multiple(client: &Client, instance: &PipedInstance, count: usize) -> Option<Duration> {
+    let pings = join_all((0..count).map(|_i| {
+        let client = client.clone();
+        let instance = instance;
+        async move {
+            let result = ping_instance(&client, &instance).await;
+            result
+        }
+    })).await;
+    
+    let valid_pings: Vec<Duration> = pings.into_iter().flatten().collect();
+    
+    if valid_pings.is_empty() {
+        println!("❌ No valid pings for {}", instance.name);
+        None
+    } else {
+        let total_millis: u128 = valid_pings.iter().map(|d| d.as_millis()).sum();
+        let avg_duration = Duration::from_millis((total_millis / valid_pings.len() as u128) as u64);
+        println!("✅ Average ping for {}: {}ms", instance.name, avg_duration.as_millis());
+        Some(avg_duration)
+    }
+}
+
+pub fn get_instances() -> Vec<PipedInstance> {
+    vec![
+        PipedInstance {
+            api_url: "https://api.piped.privacydev.net".to_string(),
+            name: "privacydev.net".to_string(),
+        },
+        PipedInstance {
+            api_url: "https://api.piped.projectsegfau.lt".to_string(),
+            name: "projectsegfau.lt".to_string(),
+        },
+        PipedInstance {
+            api_url: "https://pipedapi.adminforge.de".to_string(),
+            name: "adminforge.de".to_string(),
+        },
+        PipedInstance {
+            api_url: "https://pipedapi.leptons.xyz".to_string(),
+            name: "leptons.xyz".to_string(),
+        },
+        PipedInstance {
+            api_url: "https://pipedapi.lunar.icu".to_string(),
+            name: "lunar.icu".to_string(),
+        },
+        PipedInstance {
+            api_url: "https://pipedapi.palveluntarjoaja.eu".to_string(),
+            name: "palveluntarjoaja.eu".to_string(),
+        },
+        PipedInstance {
+            api_url: "https://pipedapi.privacydev.net".to_string(),
+            name: "privacydev.net".to_string(),
+        },
+        PipedInstance {
+            api_url: "https://pipedapi.us.projectsegfau.lt".to_string(),
+            name: "us.projectsegfau.lt".to_string(),
+        },
+        PipedInstance {
+            api_url: "https://pipedapi.wireway.ch".to_string(),
+            name: "wireway.ch".to_string(),
+        },
+    ]
+}
+
 pub async fn select_best_piped_instance() {
     let client = Client::new();
+    let instances = get_instances();
 
-    let instances = match client
-        .get("https://piped-instances.kavin.rocks/")
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await
-    {
-        Ok(response) => match response.json::<Vec<PipedInstance>>().await {
-            Ok(instances) => instances,
-            Err(e) => {
-                error!("Failed to parse instances JSON: {}", e);
-                vec![] // Return an empty vector to continue with fallback instance
-            }
-        },
-        Err(error) => {
-            error!("💥 Error fetching Piped instances: {}", error);
-            vec![] // Return an empty vector to continue with fallback instance
-        }
-    };
+    const PING_COUNT: usize = 5;
 
-    info!("Fetched {} instances", instances.len());
-
-    let filtered_instances: Vec<PipedInstance> = instances
-        .into_iter()
-        .filter(|instance| {
-            ![
-                "adminforge.de",
-                "ehwurscht.at",
-                "ggtyler.dev",
-                "phoenixthrush.com",
-                "piped.yt",
-                "private.coffee",
-                "privacydev.net",
-                "projectsegfau.lt"
-            ]
-            .contains(&instance.name.as_str())
-                && !instance.api_url.contains("kavin.rocks")
-        })
-        .collect();
-
-    info!("Filtered to {} instances", filtered_instances.len());
-
-    let mut instances_to_test = filtered_instances;
-    instances_to_test.push(PipedInstance {
-        api_url: "https://pipedapi.wireway.ch".to_string(),
-        name: "wireway.ch".to_string(),
-    });
-
-    info!("Testing {} instances", instances_to_test.len());
-
-    let ping_results = join_all(instances_to_test.iter().map(|instance| {
+    let ping_results = join_all(instances.iter().map(|instance| {
         let client = client.clone();
         async move {
-            let ping_time = ping_instance(&client, instance).await;
-            info!(
-                "🏓 Ping test for {}: {}ms",
-                instance.name,
-                ping_time.as_millis()
-            );
-            (instance, ping_time)
+            match ping_instance_multiple(&client, instance, PING_COUNT).await {
+                Some(avg_ping_time) => {
+                    Some((instance, avg_ping_time))
+                }
+                None => {
+                    None
+                }
+            }
         }
     }))
     .await;
 
-    let best_instance = ping_results
-        .into_iter()
+    let valid_results: Vec<_> = ping_results.into_iter().flatten().collect();
+
+
+    let best_instance = valid_results
+        .iter()
         .min_by_key(|(_, ping_time)| *ping_time)
-        .map(|(instance, ping_time)| (instance.api_url.clone(), ping_time));
+        .map(|(instance, ping_time)| (instance.api_url.clone(), *ping_time));
 
     match best_instance {
-        Some((api_url, ping_time)) => {
+        Some((api_url, _ping_time)) => {
             let mut selected = SELECTED_INSTANCE.write().unwrap();
             *selected = Some(api_url.clone());
-            info!(
-                "🌐 Selected Piped instance: {} ({}ms)",
-                api_url,
-                ping_time.as_millis()
-            );
         }
         None => {
-            warn!("No suitable Piped instance found, using fallback");
-            let fallback_instance = "https://pipedapi.kavin.rocks".to_string();
+            let fallback_instance = "https://pipedapi.wireway.ch".to_string();
             let mut selected = SELECTED_INSTANCE.write().unwrap();
             *selected = Some(fallback_instance.clone());
-            info!("🌐 Using fallback Piped instance: {}", fallback_instance);
         }
     }
 
     match get_selected_instance() {
-        Some(instance) => println!("🌐 Selected Piped instance: {}", instance),
+        Some(instance) => {
+            let ping_time = valid_results
+                .iter()
+                .find(|(inst, _)| inst.api_url == instance)
+                .map(|(_, time)| time.as_millis())
+                .unwrap_or(0);
+            println!("🏁 Final selected Piped instance: {} ({}ms)", instance, ping_time);
+        }
         None => println!("❌ No Piped instance selected (this should never happen)"),
     }
 }

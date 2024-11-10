@@ -60,6 +60,7 @@ async fn main() -> std::io::Result<()> {
             .service(routes::search_spotify::search_spotify_route)
             .service(routes::stream::stream_route)
             .service(routes::thumbnail::thumbnail_route)
+            .service(routes::instance::instances_route)
             .configure(routes::search::config)
     })
     .bind(("0.0.0.0", 3001))?;

@@ -4,3 +4,4 @@ pub mod search;
 pub mod search_spotify;
 pub mod stream;
 pub mod thumbnail;
+pub mod instance;
