@@ -1,13 +1,13 @@
+use crate::routes::search::{AppState, SearchCacheItem, CACHE_FILE, SEARCH_WEIGHTS_FILE};
 use actix_cors::Cors;
-use actix_web::{http::header, App, HttpServer, middleware, web};
+use actix_web::middleware::{NormalizePath, TrailingSlash};
+use actix_web::{http::header, middleware, web, App, HttpServer};
 use piped::select_best_piped_instance;
 use reqwest::Client;
-use utils::clear_log;
-use actix_web::middleware::{NormalizePath, TrailingSlash};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
-use std::collections::HashMap;
-use crate::routes::search::{SearchCacheItem, CACHE_FILE, SEARCH_WEIGHTS_FILE, AppState};
+use utils::clear_log;
 
 mod piped;
 mod routes;
@@ -21,13 +21,13 @@ async fn main() -> std::io::Result<()> {
     let search_cache: Arc<Mutex<HashMap<String, SearchCacheItem>>> = Arc::new(Mutex::new(
         std::fs::read_to_string(CACHE_FILE)
             .map(|content| serde_json::from_str(&content).unwrap_or_default())
-            .unwrap_or_default()
+            .unwrap_or_default(),
     ));
 
     let search_weights: Arc<Mutex<HashMap<String, HashMap<String, u32>>>> = Arc::new(Mutex::new(
         std::fs::read_to_string(SEARCH_WEIGHTS_FILE)
             .map(|content| serde_json::from_str(&content).unwrap_or_default())
-            .unwrap_or_default()
+            .unwrap_or_default(),
     ));
 
     let search_cancel = Arc::new(Notify::new());
@@ -42,7 +42,7 @@ async fn main() -> std::io::Result<()> {
 
     let server = HttpServer::new(move || {
         let cors = Cors::default()
-            .allowed_origin("http://localhost:3001")
+            .allowed_origin("http://localhost:3000")
             .allowed_methods(vec!["GET", "POST"])
             .allowed_headers(vec![header::AUTHORIZATION, header::ACCEPT])
             .allowed_header(header::CONTENT_TYPE)
