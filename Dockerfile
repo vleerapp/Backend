@@ -14,9 +14,17 @@ RUN rustup target add x86_64-unknown-linux-gnu && \
 
 FROM builder-base AS builder-arm64
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-RUN apt-get update && \
-    apt-get install -y gcc-aarch64-linux-gnu libssl-dev:arm64 && \
+RUN dpkg --add-architecture arm64 && \
+    apt-get update && \
+    apt-get install -y \
+        gcc-aarch64-linux-gnu \
+        libssl-dev:arm64 \
+        pkg-config \
+        crossbuild-essential-arm64 && \
     rustup target add aarch64-unknown-linux-gnu && \
+    PKG_CONFIG_ALLOW_CROSS=1 \
+    PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
+    OPENSSL_DIR=/usr/lib/aarch64-linux-gnu \
     cargo build --release --target aarch64-unknown-linux-gnu && \
     mv target/aarch64-unknown-linux-gnu/release/backend /app/backend
 
