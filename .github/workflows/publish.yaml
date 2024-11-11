@@ -18,6 +18,7 @@ env:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   GITHUB_IMAGE_NAME: ${{ github.repository_owner }}/backend
   GITHUB_REGISTRY: ghcr.io
+  CARGO_TERM_COLOR: always
 
 jobs:
   build-and-push:
@@ -28,6 +29,17 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

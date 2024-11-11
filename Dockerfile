@@ -1,18 +1,26 @@
 FROM rust:1.82.0 AS builder
 
-RUN USER=root cargo new --bin backend
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    USER=root cargo new --bin backend
 WORKDIR /backend
 
 COPY ./Cargo.lock ./Cargo.lock
 COPY ./Cargo.toml ./Cargo.toml
 
-RUN cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/backend/target \
+    cargo build --release
 RUN rm src/*.rs
 
 COPY ./src ./src
 
-RUN rm ./target/release/deps/backend*
-RUN cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/backend/target \
+    rm ./target/release/deps/backend* && \
+    cargo build --release
 
 FROM debian:bookworm-slim
 
