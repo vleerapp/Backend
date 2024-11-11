@@ -10,7 +10,9 @@ FROM builder-base AS builder-amd64
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
 RUN rustup target add x86_64-unknown-linux-gnu && \
     cargo build --release --target x86_64-unknown-linux-gnu && \
-    mv target/x86_64-unknown-linux-gnu/release/backend /app/backend
+    mv target/x86_64-unknown-linux-gnu/release/backend /app/backend && \
+    rm -rf target src Cargo.toml Cargo.lock .git* && \
+    find . -type f ! -name 'backend' -delete
 
 FROM builder-base AS builder-arm64
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
@@ -31,7 +33,9 @@ RUN dpkg --add-architecture arm64 && \
     AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu \
     AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu \
     cargo build --release --target aarch64-unknown-linux-gnu && \
-    mv target/aarch64-unknown-linux-gnu/release/backend /app/backend
+    mv target/aarch64-unknown-linux-gnu/release/backend /app/backend && \
+    rm -rf target src Cargo.toml Cargo.lock .git* && \
+    find . -type f ! -name 'backend' -delete
 
 FROM ubuntu:22.04 AS runtime
 RUN apt-get update && \
