@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 pub struct PipedInstance {
     pub api_url: String,
     pub name: String,
+    pub country: Vec<String>,
 }
 
 static SELECTED_INSTANCE: RwLock<Option<String>> = RwLock::new(None);
@@ -58,38 +59,72 @@ pub fn get_instances() -> Vec<PipedInstance> {
         PipedInstance {
             api_url: "https://api.piped.privacydev.net".to_string(),
             name: "privacydev.net".to_string(),
-        },
-        PipedInstance {
-            api_url: "https://api.piped.projectsegfau.lt".to_string(),
-            name: "projectsegfau.lt".to_string(),
+            country: vec!["france".to_string()],
         },
         PipedInstance {
             api_url: "https://pipedapi.adminforge.de".to_string(),
             name: "adminforge.de".to_string(),
+            country: vec!["germany".to_string()],
         },
         PipedInstance {
             api_url: "https://pipedapi.leptons.xyz".to_string(),
             name: "leptons.xyz".to_string(),
+            country: vec!["austria".to_string()],
+        },
+        PipedInstance {
+            api_url: "https://api.piped.private.coffee".to_string(),
+            name: "private.coffee".to_string(),
+            country: vec!["austria".to_string()],
         },
         PipedInstance {
             api_url: "https://pipedapi.lunar.icu".to_string(),
             name: "lunar.icu".to_string(),
-        },
-        PipedInstance {
-            api_url: "https://pipedapi.palveluntarjoaja.eu".to_string(),
-            name: "palveluntarjoaja.eu".to_string(),
-        },
-        PipedInstance {
-            api_url: "https://pipedapi.privacydev.net".to_string(),
-            name: "privacydev.net".to_string(),
-        },
-        PipedInstance {
-            api_url: "https://pipedapi.us.projectsegfau.lt".to_string(),
-            name: "us.projectsegfau.lt".to_string(),
+            country: vec!["germany".to_string()],
         },
         PipedInstance {
             api_url: "https://pipedapi.wireway.ch".to_string(),
             name: "wireway.ch".to_string(),
+            country: vec!["switzerland".to_string()],
+        },
+        PipedInstance {
+            api_url: "https://piped.smnz.de".to_string(),
+            name: "smnz.de".to_string(),
+            country: vec!["germany".to_string()],
+        },
+        PipedInstance {
+            api_url: "https://api.piped.yt".to_string(),
+            name: "piped.yt".to_string(),
+            country: vec!["germany".to_string()],
+        },
+        PipedInstance {
+            api_url: "https://pipedapi.reallyaweso.me".to_string(),
+            name: "reallyaweso.me".to_string(),
+            country: vec!["germany".to_string()],
+        },
+        PipedInstance {
+            api_url: "https://pipedapi-libre.kavin.rocks/".to_string(),
+            name: "kavin.rocks".to_string(),
+            country: vec!["netherlands".to_string()],
+        },
+        PipedInstance {
+            api_url: "https://pipedapi.ducks.party".to_string(),
+            name: "ducks.party".to_string(),
+            country: vec!["netherlands".to_string()],
+        },
+        PipedInstance {
+            api_url: "https://piped-api.codespace.cz".to_string(),
+            name: "codespace.cz".to_string(), 
+            country: vec!["czech".to_string()],
+        },
+        PipedInstance {
+            api_url: "https://pipedapi.drgns.space".to_string(),
+            name: "drgns.space".to_string(),
+            country: vec!["us".to_string()],
+        },
+        PipedInstance {
+            api_url: "https://piapi.ggtyler.dev".to_string(),
+            name: "ggtyler.dev".to_string(),
+            country: vec!["us".to_string()],
         },
     ]
 }
