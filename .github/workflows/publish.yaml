@@ -41,6 +41,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Install Docker
+        run: |
+          brew install docker
+          colima start
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
