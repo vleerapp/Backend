@@ -15,7 +15,7 @@ RUN rustup target add x86_64-unknown-linux-gnu && \
 FROM builder-base AS builder-arm64
 ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
 RUN apt-get update && \
-    apt-get install -y gcc-aarch64-linux-gnu && \
+    apt-get install -y gcc-aarch64-linux-gnu libssl-dev:arm64 && \
     rustup target add aarch64-unknown-linux-gnu && \
     cargo build --release --target aarch64-unknown-linux-gnu && \
     mv target/aarch64-unknown-linux-gnu/release/backend /app/backend
@@ -34,5 +34,5 @@ FROM runtime AS runtime-arm64
 COPY --from=builder-arm64 /app/backend .
 
 FROM runtime-$TARGETARCH
-EXPOSE 3000
+EXPOSE 3001
 CMD ["./backend"]
