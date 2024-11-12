@@ -20,7 +20,51 @@ env:
   GITHUB_REGISTRY: ghcr.io
 
 jobs:
-  build-and-push:
+  build-and-push-amd64:
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          password: ${{ env.DOCKERHUB_TOKEN }}
+          username: ${{ env.DOCKERHUB_USERNAME }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ env.GITHUB_REGISTRY }}
+          username: ${{ github.actor }}
+
+      - name: Set version
+        id: set_version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "VERSION=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and push AMD64
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.DOCKERHUB_REPOSITORY }}:${{ steps.set_version.outputs.VERSION }}-amd64
+            ${{ env.GITHUB_REGISTRY }}/${{ env.GITHUB_IMAGE_NAME }}:${{ steps.set_version.outputs.VERSION }}-amd64
+
+  build-and-push-arm64:
     permissions:
       contents: read
       packages: write
@@ -57,12 +101,52 @@ jobs:
             echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build and push to DockerHub and GitHub Packages
+      - name: Build and push ARM64
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/arm64
           push: true
           tags: |
-            ${{ env.DOCKERHUB_REPOSITORY }}:${{ steps.set_version.outputs.VERSION }}
-            ${{ env.GITHUB_REGISTRY }}/${{ env.GITHUB_IMAGE_NAME }}:${{ steps.set_version.outputs.VERSION }}
+            ${{ env.DOCKERHUB_REPOSITORY }}:${{ steps.set_version.outputs.VERSION }}-arm64
+            ${{ env.GITHUB_REGISTRY }}/${{ env.GITHUB_IMAGE_NAME }}:${{ steps.set_version.outputs.VERSION }}-arm64
+
+  create-manifest:
+    needs: [build-and-push-amd64, build-and-push-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          password: ${{ env.DOCKERHUB_TOKEN }}
+          username: ${{ env.DOCKERHUB_USERNAME }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ env.GITHUB_REGISTRY }}
+          username: ${{ github.actor }}
+
+      - name: Set version
+        id: set_version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "VERSION=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push manifest
+        run: |
+          # Create and push DockerHub manifest
+          docker manifest create ${{ env.DOCKERHUB_REPOSITORY }}:${{ steps.set_version.outputs.VERSION }} \
+            ${{ env.DOCKERHUB_REPOSITORY }}:${{ steps.set_version.outputs.VERSION }}-amd64 \
+            ${{ env.DOCKERHUB_REPOSITORY }}:${{ steps.set_version.outputs.VERSION }}-arm64
+          docker manifest push ${{ env.DOCKERHUB_REPOSITORY }}:${{ steps.set_version.outputs.VERSION }}
+
+          # Create and push GitHub Container Registry manifest
+          docker manifest create ${{ env.GITHUB_REGISTRY }}/${{ env.GITHUB_IMAGE_NAME }}:${{ steps.set_version.outputs.VERSION }} \
+            ${{ env.GITHUB_REGISTRY }}/${{ env.GITHUB_IMAGE_NAME }}:${{ steps.set_version.outputs.VERSION }}-amd64 \
+            ${{ env.GITHUB_REGISTRY }}/${{ env.GITHUB_IMAGE_NAME }}:${{ steps.set_version.outputs.VERSION }}-arm64
+          docker manifest push ${{ env.GITHUB_REGISTRY }}/${{ env.GITHUB_IMAGE_NAME }}:${{ steps.set_version.outputs.VERSION }}
