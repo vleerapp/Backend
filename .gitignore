@@ -9,3 +9,4 @@ dist/
 /target
 app.log
 rustypipe_cache.json
+build_arm.sh
