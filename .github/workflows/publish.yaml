@@ -25,6 +25,10 @@ jobs:
       contents: read
       packages: write
     runs-on: ubuntu-latest
+    continue-on-error: true  # Allow this job to fail without stopping others
+    outputs:
+      success: ${{ steps.build.outcome == 'success' }}
+      version: ${{ steps.set_version.outputs.VERSION }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -55,6 +59,7 @@ jobs:
           fi
 
       - name: Build and push AMD64
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -69,6 +74,10 @@ jobs:
       contents: read
       packages: write
     runs-on: ubuntu-latest
+    continue-on-error: true  # Allow this job to fail without stopping others
+    outputs:
+      success: ${{ steps.build.outcome == 'success' }}
+      version: ${{ steps.set_version.outputs.VERSION }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -102,6 +111,7 @@ jobs:
           fi
 
       - name: Build and push ARM64
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
