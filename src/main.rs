@@ -7,7 +7,7 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
-use utils::clear_log;
+use utils::{clear_log, init_logging};
 
 mod piped;
 mod routes;
@@ -17,6 +17,7 @@ mod utils;
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     clear_log();
+    init_logging();
 
     let search_cache: Arc<Mutex<HashMap<String, SearchCacheItem>>> = Arc::new(Mutex::new(
         std::fs::read_to_string(CACHE_FILE)

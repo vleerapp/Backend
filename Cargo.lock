@@ -19,6 +19,7 @@ dependencies = [
  "futures",
  "futures-util",
  "image",
+ "kdam",
  "log",
  "md5",
  "regex",
@@ -1547,6 +1548,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "kdam"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0adf504eb0c61c2da8c5d674a1243db8b2320d44686be22a6c7c8aa7d2dbf6bf"
+dependencies = [
+ "kdam_derive",
+ "terminal_size",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "kdam_derive"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb5e25f9b861a88faa9d272ca4376e1a13c9a37d36de623f013c7bbb0ae2baa1"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "language-tags"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2503,18 +2525,18 @@ checksum = "61697e0a1c7e512e84a621326239844a24d8207b4669b41bc18b32ea5cbf988b"
 
 [[package]]
 name = "serde"
-version = "1.0.214"
+version = "1.0.215"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f55c3193aca71c12ad7890f1785d2b73e1b9f63a0bbc353c08ef26fe03fc56b5"
+checksum = "6513c1ad0b11a9376da888e3e0baa0077f1aed55c17f50e7b2397136129fb88f"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.214"
+version = "1.0.215"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de523f781f095e28fa605cdce0f8307e451cc0fd14e2eb4cd2e98a355b147766"
+checksum = "ad1e866f866923f252f05c889987993144fb74e722403468a4ebd70c3cd756c0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2762,6 +2784,16 @@ dependencies = [
  "cfg-if",
  "fastrand",
  "once_cell",
+ "rustix",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "terminal_size"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f599bd7ca042cfdf8f4512b277c02ba102247820f9d9d4a9f521f496751a6ef"
+dependencies = [
  "rustix",
  "windows-sys 0.59.0",
 ]

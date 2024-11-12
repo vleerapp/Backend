@@ -1,5 +1,5 @@
-use actix_web::{get, web, HttpRequest, HttpResponse, Responder};
-use crate::utils::log;
+use actix_web::{get, web, HttpRequest, HttpResponse};
+use crate::utils::log_with_table;
 use rustypipe::param::StreamFilter;
 use rustypipe_downloader::DownloaderBuilder;
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,7 @@ use tokio::process::Command;
 use futures::stream::{self};
 use actix_web::web::Bytes;
 use std::io::{self, ErrorKind};
+use std::time::Instant;
 
 const CHUNK_SIZE: u64 = 1000 * 1024; // 1000 KB chunks
 
@@ -23,7 +24,8 @@ struct StreamQuery {
 async fn stream_route(
     query: web::Query<StreamQuery>,
     req: HttpRequest,
-) -> impl Responder {
+) -> Result<HttpResponse, actix_web::Error> {
+    let start_time = Instant::now();
     let StreamQuery { id, quality } = query.into_inner();
 
     let cache_dir = PathBuf::from("cache").join(&quality);
@@ -32,24 +34,64 @@ async fn stream_route(
 
     fs::create_dir_all(&cache_dir).await.unwrap();
 
-    if !cached_file_path.exists() {
+    let is_cached = cached_file_path.exists();
+    if !is_cached {
+        let _ = log_with_table("ℹ️ Starting new download and conversion", vec![
+            ("ID", id.clone()),
+            ("Quality", quality.clone()),
+            ("Cached", "false".to_string()),
+            ("Duration (ms)", start_time.elapsed().as_millis().to_string())
+        ]).map_err(actix_web::error::ErrorInternalServerError)?;
+
         match download_with_rustypipe(id.clone(), &cache_dir, &quality).await {
-            Ok(_) => log("File downloaded and processed successfully."),
+            Ok(_) => {
+                let _ = log_with_table("✅ Processing complete", vec![
+                    ("ID", id.clone()),
+                    ("Quality", quality.clone()),
+                    ("Cached", "false".to_string()),
+                    ("Duration (ms)", start_time.elapsed().as_millis().to_string())
+                ]).map_err(actix_web::error::ErrorInternalServerError)?;
+            }
             Err(e) => {
-                log(&format!("Failed to download or process file: {}", e));
-                return HttpResponse::InternalServerError().finish();
+                let _ = log_with_table("💥 Failed to download or process file.", vec![
+                    ("Error", e.to_string()),
+                    ("Cached", "false".to_string()),
+                    ("Duration (ms)", start_time.elapsed().as_millis().to_string())
+                ]).map_err(actix_web::error::ErrorInternalServerError)?;
+                return Ok(HttpResponse::InternalServerError().finish());
             }
         }
+    } else {
+        let _ = log_with_table("ℹ️ Using cached file", vec![
+            ("ID", id.clone()),
+            ("Quality", quality.clone()),
+            ("Cached", "true".to_string()),
+            ("Duration (ms)", start_time.elapsed().as_millis().to_string())
+        ]).map_err(actix_web::error::ErrorInternalServerError)?;
     }
 
     let file = match File::open(&cached_file_path).await {
         Ok(file) => file,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
+        Err(e) => {
+            let _ = log_with_table("💥 Failed to open cached file.", vec![
+                ("Error", e.to_string()),
+                ("Cached", is_cached.to_string()),
+                ("Duration (ms)", start_time.elapsed().as_millis().to_string())
+            ]);
+            return Ok(HttpResponse::InternalServerError().finish());
+        }
     };
 
     let metadata = match file.metadata().await {
         Ok(metadata) => metadata,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
+        Err(e) => {
+            let _ = log_with_table("💥 Failed to read file metadata.", vec![
+                ("Error", e.to_string()),
+                ("Cached", is_cached.to_string()),
+                ("Duration (ms)", start_time.elapsed().as_millis().to_string())
+            ]);
+            return Ok(HttpResponse::InternalServerError().finish());
+        }
     };
 
     let total_length = metadata.len();
@@ -58,7 +100,7 @@ async fn stream_route(
     let (start, end) = match range_header {
         Some(range) => match parse_range(range, total_length) {
             Ok(range) => range,
-            Err(_) => return HttpResponse::BadRequest().finish(),
+            Err(_) => return Ok(HttpResponse::BadRequest().finish()),
         },
         None => (0, total_length - 1),
     };
@@ -84,11 +126,11 @@ async fn stream_route(
         }
     });
 
-    HttpResponse::PartialContent()
+    Ok(HttpResponse::PartialContent()
         .insert_header(("Content-Type", content_type))
         .insert_header(("Content-Range", format!("bytes {}-{}/{}", start, end, total_length)))
         .insert_header(("Accept-Ranges", "bytes"))
-        .streaming(stream)
+        .streaming(stream))
 }
 
 fn parse_range(range: &str, total_length: u64) -> Result<(u64, u64), actix_web::error::Error> {
@@ -98,7 +140,7 @@ fn parse_range(range: &str, total_length: u64) -> Result<(u64, u64), actix_web::
     let end = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(total_length - 1);
 
     if start >= total_length || end >= total_length || start > end {
-        log(&format!("💥 Invalid range: {}", range));
+        let _ = log_with_table("💥 Invalid range.", vec![("Requested range", range.to_string())]);
         return Err(actix_web::error::ErrorBadRequest("Requested range not satisfiable"));
     }
 
@@ -110,7 +152,6 @@ async fn download_with_rustypipe(
     cache_dir: &PathBuf,
     quality: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    log(&format!("📥 Downloading video: {}", id));
     let dl = DownloaderBuilder::new().audio_tag().crop_cover().build();
     let filter_audio = StreamFilter::new().no_video();
     let audio_path = cache_dir.join(format!("{}.opus", id));
@@ -121,7 +162,6 @@ async fn download_with_rustypipe(
         .await?;
 
     let output_extension = if quality == "compressed" { "mp3" } else { "flac" };
-    log(&format!("Converting {}.opus to {}.{}", id, id, output_extension));
     let output_path = cache_dir.join(format!("{}.{}", id, output_extension));
     let output = Command::new("ffmpeg")
         .args(&[
@@ -134,10 +174,7 @@ async fn download_with_rustypipe(
         .expect("Failed to execute ffmpeg");
 
     if !output.status.success() {
-        log(&format!(
-            "FFmpeg conversion failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        let _ = log_with_table("💥 FFmpeg conversion failed.", vec![("Error", String::from_utf8_lossy(&output.stderr).to_string())]);
     }
 
     fs::remove_file(audio_path).await?;

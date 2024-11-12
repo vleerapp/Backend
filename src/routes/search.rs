@@ -13,13 +13,13 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH, Instant};
 use tokio::fs;
 use tokio::sync::{Mutex, Notify};
 
 use crate::piped::get_selected_instance;
 use crate::types::{Album, Playlist, Song};
-use crate::utils::log;
+use crate::utils::log_with_table;
 
 pub const CACHE_FILE: &str = "./cache/search_cache.json";
 pub const SEARCH_WEIGHTS_FILE: &str = "./cache/search_weights.json";
@@ -297,16 +297,14 @@ pub async fn search_route(
     data: web::Data<AppState>,
     client: web::Data<Client>,
 ) -> Result<HttpResponse, Error> {
+    let start_time = Instant::now();
+
     let search_cache = &data.search_cache;
     let search_cancel = &data.search_cancel;
 
     let instance = get_selected_instance()
         .ok_or_else(|| ErrorInternalServerError("No Piped instance selected"))?;
     let is_full_mode = query.mode.as_deref() != Some("minimal");
-    let start_time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
 
     let filters: HashMap<&str, &str> = [
         ("albums", "music_albums"),
@@ -409,19 +407,26 @@ pub async fn search_route(
                                 .map_err(|e| ErrorInternalServerError(e.to_string()))?;
 
                             if !content_type.starts_with("application/json") {
-                                log(&format!(
-                                    "💥 Unexpected content type for \"{}\": {}. Response: {}",
-                                    url, content_type, response_text
-                                ));
+                                let _ = log_with_table(
+                                    "💥 Error: Invalid content type",
+                                    vec![
+                                        ("URL", url.to_string()),
+                                        ("Content-Type", content_type.to_string()),
+                                    ],
+                                );
                                 return Ok(Vec::new());
                             }
 
                             serde_json::from_str::<Value>(&response_text)
                                 .map_err(|e| {
-                                    log(&format!(
-                                        "💥 JSON parsing error for \"{}\": {}. Response: {}",
-                                        query.query, e, response_text
-                                    ));
+                                    let _ = log_with_table(
+                                        "💥 Error: JSON parsing failed",
+                                        vec![
+                                            ("Query", query.query.clone()),
+                                            ("Error", e.to_string()),
+                                            ("Response", response_text.clone()),
+                                        ],
+                                    );
                                     ErrorInternalServerError(
                                         "An error occurred while parsing the search results",
                                     )
@@ -595,7 +600,13 @@ pub async fn search_route(
                     Ok(results)
                 }
                 Err(e) => {
-                    log(&format!("💥 Search error for instance {}: {}", instance, e));
+                    let _ = log_with_table(
+                        "💥 Error: Search failed",
+                        vec![
+                            ("Instance", instance.clone()),
+                            ("Error", e.to_string()),
+                        ],
+                    );
                     Err(ErrorInternalServerError(format!(
                         "Failed to perform search: {}",
                         e
@@ -653,29 +664,22 @@ pub async fn search_route(
         results = filtered_results;
     }
 
-    let end_time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    let duration = end_time - start_time;
-
-    if is_cached {
-        log(&format!(
-            "✅ Search (cached): \"{}\" | Filter: {} | Mode: {} | Duration: {} ms",
-            query.query,
-            query.filter.as_deref().unwrap_or("all"),
-            if is_full_mode { "full" } else { "minimal" },
-            duration
-        ));
-    } else {
-        log(&format!(
-            "✅ Search: \"{}\" | Filters: {} | Mode: {} | Duration: {} ms",
-            query.query,
-            filters_to_search.join(", "),
-            if is_full_mode { "full" } else { "minimal" },
-            duration
-        ));
-    }
+    let duration = start_time.elapsed().as_millis();
+    let _ = log_with_table(
+        &format!("✅ Search completed {}", if is_cached { "(cached)" } else { "" }),
+        vec![
+            ("Query", query.query.clone()),
+            ("Filter", query.filter.as_deref().unwrap_or("all").to_string()),
+            ("Mode", if is_full_mode { "full" } else { "minimal" }.to_string()),
+            ("Duration", format!("{} ms", duration)),
+            ("Cached", is_cached.to_string()),
+            ("Results", format!("Albums: {}, Playlists: {}, Songs: {}", 
+                results.albums.len(),
+                results.playlists.len(), 
+                results.songs.len()
+            )),
+        ],
+    );
 
     ensure_cache_dir().await.map_err(ErrorInternalServerError)?;
 

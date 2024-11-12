@@ -1,7 +1,7 @@
 use actix_web::{get, HttpResponse, Responder};
 use serde::Serialize;
 
-use crate::piped::get_instances;
+use crate::{piped::get_instances, utils::log_with_table};
 
 #[derive(Serialize)]
 struct InstanceLatency {
@@ -12,6 +12,13 @@ struct InstanceLatency {
 #[get("/instances")]
 pub async fn instances_route() -> impl Responder {
     let instances = get_instances();
+
+    let table_data = vec![
+        ("Total Instances", instances.len().to_string()),
+        ("Status", "Available".to_string()),
+    ];
+
+    let _ = log_with_table("ℹ️ Fetching available instances", table_data);
 
     HttpResponse::Ok().json(
         instances

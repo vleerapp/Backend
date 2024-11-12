@@ -9,6 +9,8 @@ use std::fs;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::utils::log_with_table;
+
 const CACHE_FILE: &str = "./cache/spotify_search_cache.json";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -70,12 +72,14 @@ async fn search_spotify_route(
     query: web::Query<HashMap<String, String>>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    println!("test");
-
     let query = match query.get("query") {
         Some(q) => q,
         None => {
-            return HttpResponse::BadRequest().json(json!({"error": "Search query is required"}))
+            let _ = log_with_table(
+                "💥 Invalid request",
+                vec![("Error", "Missing search query parameter".to_string())],
+            );
+            return HttpResponse::BadRequest().json(json!({"error": "Search query is required"}));
         }
     };
 
@@ -83,21 +87,29 @@ async fn search_spotify_route(
 
     {
         let search_cache = data.search_cache.lock().await;
-        if let Some(_cached_results) = search_cache.get(query) {
+        if let Some(cached_results) = search_cache.get(query) {
             let duration = Utc::now().signed_duration_since(start_time);
-            log(&format!(
-                "✅ Spotify search (cached): \"{}\" | Duration: {} ms",
-                query,
-                duration.num_milliseconds()
-            ));
+            let _ = log_with_table(
+                "✅ Spotify search completed",
+                vec![
+                    ("Query", query.to_string()),
+                    ("Duration", format!("{} ms", duration.num_milliseconds())),
+                    ("Cache", "Hit".to_string()),
+                    ("Results", format!("{} tracks", cached_results.len())),
+                ],
+            );
+            return HttpResponse::Ok().json(cached_results);
         }
     }
 
     if !auth(&data).await {
-        log(&format!(
-            "💥 Spotify authentication failed for query: \"{}\"",
-            query
-        ));
+        let _ = log_with_table(
+            "💥 Spotify authentication failed",
+            vec![
+                ("Query", query.to_string()),
+                ("Error", "Failed to authenticate with Spotify API".to_string()),
+            ],
+        );
         return HttpResponse::InternalServerError()
             .json(json!({"error": "Failed to authenticate"}));
     }
@@ -109,21 +121,32 @@ async fn search_spotify_route(
             save_cache(&search_cache);
 
             let duration = Utc::now().signed_duration_since(start_time);
-            log(&format!(
-                "✅ Spotify search: \"{}\" | Duration: {} ms",
-                query,
-                duration.num_milliseconds()
-            ));
+            let _ = log_with_table(
+                "✅ Spotify search completed",
+                vec![
+                    ("Query", query.to_string()),
+                    ("Duration", format!("{} ms", duration.num_milliseconds())),
+                    ("Cache", "Miss".to_string()),
+                    ("Results", format!("{} tracks", minified_results.len())),
+                ],
+            );
 
             HttpResponse::Ok().json(minified_results)
         }
         Err(e) => {
-            log(&format!("💥 Spotify search error for \"{}\": {}", query, e));
+            let _ = log_with_table(
+                "💥 Spotify search error",
+                vec![
+                    ("Query", query.to_string()),
+                    ("Error", format!("API request failed: {}", e).to_string()),
+                ],
+            );
             HttpResponse::InternalServerError()
                 .json(json!({"error": "Failed to fetch search results"}))
         }
     }
 }
+
 async fn auth(data: &web::Data<AppState>) -> bool {
     let mut auth = data.auth.lock().await;
     if let (Some(_token), Some(expiration)) =
@@ -146,7 +169,13 @@ async fn auth(data: &web::Data<AppState>) -> bool {
     {
         Ok(resp) => resp,
         Err(e) => {
-            log(&format!("💥 Failed to get access token: {}", e));
+            let _ = log_with_table(
+                "💥 Authentication error",
+                vec![(
+                    "Error",
+                    format!("Failed to fetch Spotify session: {}", e).to_string(),
+                )],
+            );
             return false;
         }
     };
@@ -154,7 +183,13 @@ async fn auth(data: &web::Data<AppState>) -> bool {
     let body = match response.text().await {
         Ok(body) => body,
         Err(e) => {
-            log(&format!("💥 Failed to read response body: {}", e));
+            let _ = log_with_table(
+                "💥 Authentication error",
+                vec![(
+                    "Error",
+                    format!("Failed to read session response: {}", e).to_string(),
+                )],
+            );
             return false;
         }
     };
@@ -168,7 +203,10 @@ async fn auth(data: &web::Data<AppState>) -> bool {
         }
     }
 
-    log("Failed to get access token");
+    let _ = log_with_table(
+        "💥 Authentication error",
+        vec![("Error", "Failed to parse Spotify session data".to_string())],
+    );
     false
 }
 
@@ -225,8 +263,4 @@ fn save_cache(cache: &HashMap<String, HashMap<String, MinifiedTrack>>) {
     if let Ok(json) = serde_json::to_string(cache) {
         let _ = fs::write(CACHE_FILE, json);
     }
-}
-
-fn log(message: &str) {
-    println!("{}", message);
 }
