@@ -5,9 +5,9 @@ use rustypipe_downloader::DownloaderBuilder;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
-use tokio::fs::{create_dir_all, File, read_dir, remove_file};
-use tokio_util::io::ReaderStream;
 use std::time::Instant;
+use tokio::fs::{create_dir_all, read_dir, remove_file, File};
+use tokio_util::io::ReaderStream;
 
 use crate::utils::log_with_table;
 
@@ -22,11 +22,23 @@ async fn download_route(query: web::Query<DownloadQuery>) -> Result<HttpResponse
     let start_time = Instant::now();
     let DownloadQuery { id, quality } = query.into_inner();
 
+    if !id
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        || id.len() != 11
+    {
+        return Ok(HttpResponse::BadRequest().body("Invalid YouTube video ID format"));
+    }
+
+    if id.contains('/') || id.contains('\\') {
+        return Ok(HttpResponse::BadRequest().body("Invalid YouTube video ID"));
+    }
+
     if id.is_empty() || (quality != "compressed" && quality != "lossless") {
-        let _ = log_with_table("❌ Invalid request parameters", vec![
-            ("ID", id.clone()),
-            ("Quality", quality.to_string())
-        ])?;
+        let _ = log_with_table(
+            "❌ Invalid request parameters",
+            vec![("ID", id.clone()), ("Quality", quality.to_string())],
+        )?;
         return Ok(HttpResponse::BadRequest().json(serde_json::json!({
             "error": "Invalid or missing id or quality parameter"
         })));
@@ -53,22 +65,28 @@ async fn download_route(query: web::Query<DownloadQuery>) -> Result<HttpResponse
                 ("ID", id.clone()),
                 ("Quality", quality.to_string()),
                 ("File Path", file_path.display().to_string()),
-                ("Format", file_extension.to_string())
+                ("Format", file_extension.to_string()),
             ],
         )?;
         match download_with_rustypipe(id.clone(), &cache_dir, &quality).await {
             Ok(_) => {
-                let _ = log_with_table("✅ Download completed", vec![
-                    ("ID", id.clone()),
-                    ("File", file_path.display().to_string())
-                ])?;
+                let _ = log_with_table(
+                    "✅ Download completed",
+                    vec![
+                        ("ID", id.clone()),
+                        ("File", file_path.display().to_string()),
+                    ],
+                )?;
             }
             Err(e) => {
-                let _ = log_with_table("💥 Download failed", vec![
-                    ("ID", id.clone()),
-                    ("Error", e.to_string()),
-                    ("File", file_path.display().to_string())
-                ])?;
+                let _ = log_with_table(
+                    "💥 Download failed",
+                    vec![
+                        ("ID", id.clone()),
+                        ("Error", e.to_string()),
+                        ("File", file_path.display().to_string()),
+                    ],
+                )?;
                 return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
                     "error": "Failed to download video",
                     "details": e.to_string()
@@ -76,10 +94,13 @@ async fn download_route(query: web::Query<DownloadQuery>) -> Result<HttpResponse
             }
         }
     } else {
-        let _ = log_with_table("ℹ️ Using cached file", vec![
-            ("ID", id.clone()),
-            ("File", file_path.display().to_string())
-        ])?;
+        let _ = log_with_table(
+            "ℹ️ Using cached file",
+            vec![
+                ("ID", id.clone()),
+                ("File", file_path.display().to_string()),
+            ],
+        )?;
     }
 
     let file = File::open(&file_path).await?;
@@ -103,10 +124,13 @@ async fn download_route(query: web::Query<DownloadQuery>) -> Result<HttpResponse
                         if let Some(extension) = entry.path().extension() {
                             if extension != "flac" && extension != "mp3" {
                                 if let Err(e) = remove_file(entry.path()).await {
-                                    let _ = log_with_table("💥 Cache cleanup failed", vec![
-                                        ("File", entry.path().display().to_string()),
-                                        ("Error", e.to_string())
-                                    ]);
+                                    let _ = log_with_table(
+                                        "💥 Cache cleanup failed",
+                                        vec![
+                                            ("File", entry.path().display().to_string()),
+                                            ("Error", e.to_string()),
+                                        ],
+                                    );
                                 }
                             }
                         }
@@ -118,12 +142,15 @@ async fn download_route(query: web::Query<DownloadQuery>) -> Result<HttpResponse
 
     let duration = start_time.elapsed().as_millis();
     let _ = log_with_table(
-        &format!("✅ Download completed {}", if file_path.exists() { "(cached)" } else { "" }),
+        &format!(
+            "✅ Download completed {}",
+            if file_path.exists() { "(cached)" } else { "" }
+        ),
         vec![
             ("ID", id.clone()),
             ("Quality", quality.to_string()),
             ("Duration", format!("{} ms", duration)),
-            ("Cached", file_path.exists().to_string())
+            ("Cached", file_path.exists().to_string()),
         ],
     )?;
 
@@ -161,10 +188,10 @@ async fn download_with_rustypipe(
 
     if !output.status.success() {
         let error_msg = String::from_utf8_lossy(&output.stderr);
-        let _ = log_with_table("💥 FFmpeg conversion failed", vec![
-            ("ID", id),
-            ("Error", error_msg.to_string())
-        ]);
+        let _ = log_with_table(
+            "💥 FFmpeg conversion failed",
+            vec![("ID", id), ("Error", error_msg.to_string())],
+        );
         return Err(format!("FFmpeg conversion failed: {}", error_msg).into());
     }
 

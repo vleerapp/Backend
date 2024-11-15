@@ -28,6 +28,14 @@ async fn stream_route(
     let start_time = Instant::now();
     let StreamQuery { id, quality } = query.into_inner();
 
+    if !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') || id.len() != 11 {
+        return Ok(HttpResponse::BadRequest().body("Invalid YouTube video ID format"));
+    }
+
+    if id.contains('/') || id.contains('\\') {
+        return Ok(HttpResponse::BadRequest().body("Invalid YouTube video ID"));
+    }
+
     let cache_dir = PathBuf::from("cache").join(&quality);
     let file_extension = if quality == "compressed" { "mp3" } else { "flac" };
     let cached_file_path = cache_dir.join(format!("{}.{}", id, file_extension));
