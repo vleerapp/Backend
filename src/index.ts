@@ -8,12 +8,8 @@ import thumbnailRouter from './routes/thumbnail';
 const app = express();
 const port = 3000;
 
-const isDevelopment = process.env.NODE_ENV === 'development';
-
 export const log = (message: string) => {
-  if (isDevelopment) {
-    console.log(`[${new Date().toLocaleString()}] ${message}`);
-  }
+  console.log(`[${new Date().toLocaleString()}] ${message}`);
 };
 
 app.use(express.json());
